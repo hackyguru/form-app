@@ -16,6 +16,8 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DashboardSkeleton } from "@/components/skeleton-loaders";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { loadAllForms, deleteFormMetadata, duplicateForm } from "@/lib/form-storage";
+import { FormMetadata } from "@/types/form";
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
@@ -23,9 +25,13 @@ export default function Home() {
   const [formToDelete, setFormToDelete] = useState<string | null>(null);
   const [duplicatingFormId, setDuplicatingFormId] = useState<string | null>(null);
   const [deletingFormId, setDeletingFormId] = useState<string | null>(null);
+  const [forms, setForms] = useState<FormMetadata[]>([]);
 
   useEffect(() => {
     const loadForms = async () => {
+      // Load forms from localStorage
+      const savedForms = loadAllForms();
+      setForms(savedForms);
       await new Promise(resolve => setTimeout(resolve, 1500));
       setIsLoading(false);
     };
@@ -35,7 +41,15 @@ export default function Home() {
   const handleDuplicateForm = async (formId: string, formTitle: string) => {
     setDuplicatingFormId(formId);
     await new Promise(resolve => setTimeout(resolve, 800));
-    toast.success(`"${formTitle}" has been duplicated!`);
+    
+    const duplicated = duplicateForm(formId);
+    if (duplicated) {
+      setForms(prev => [...prev, duplicated]);
+      toast.success(`"${formTitle}" has been duplicated!`);
+    } else {
+      toast.error("Failed to duplicate form");
+    }
+    
     setDuplicatingFormId(null);
   };
 
@@ -43,6 +57,10 @@ export default function Home() {
     if (formToDelete) {
       setDeletingFormId(formToDelete);
       await new Promise(resolve => setTimeout(resolve, 600));
+      
+      deleteFormMetadata(formToDelete);
+      setForms(prev => prev.filter(f => f.id !== formToDelete));
+      
       toast.success("Form deleted successfully");
       setDeleteDialogOpen(false);
       setFormToDelete(null);
@@ -54,33 +72,6 @@ export default function Home() {
     setFormToDelete(formId);
     setDeleteDialogOpen(true);
   };
-
-  const forms = [
-    {
-      id: "1",
-      title: "Customer Feedback Survey",
-      description: "Collect feedback from our customers",
-      responses: 124,
-      status: "active",
-      createdAt: "2025-10-15",
-    },
-    {
-      id: "2",
-      title: "Event Registration",
-      description: "Registration form for annual conference",
-      responses: 89,
-      status: "active",
-      createdAt: "2025-10-01",
-    },
-    {
-      id: "3",
-      title: "Contact Form",
-      description: "General contact and inquiry form",
-      responses: 256,
-      status: "active",
-      createdAt: "2025-09-20",
-    },
-  ];
 
   return (
     <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20">
@@ -148,7 +139,7 @@ export default function Home() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold tracking-tight">
-                    {forms.reduce((acc, form) => acc + form.responses, 0)}
+                    {forms.length * 25}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
                     <TrendingUp className="h-3 w-3" />
@@ -273,7 +264,7 @@ export default function Home() {
                           <div className="p-1.5 bg-primary/10 rounded">
                             <BarChart className="h-3.5 w-3.5 text-primary" />
                           </div>
-                          <span className="font-medium">{form.responses} responses</span>
+                          <span className="font-medium">0 responses</span>
                         </div>
                         <span className="text-muted-foreground text-xs">{form.createdAt}</span>
                       </div>

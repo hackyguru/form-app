@@ -4,37 +4,77 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Shield, Lock, Send, CheckCircle2, Sparkles } from "lucide-react";
+import { Shield, Lock, Send, CheckCircle2, Sparkles, Loader2 } from "lucide-react";
 import { useRouter } from "next/router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { loadFormMetadata } from "@/lib/form-storage";
+import { FormMetadata } from "@/types/form";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export default function FormPreview() {
   const router = useRouter();
   const { id } = router.query;
   const [submitted, setSubmitted] = useState(false);
+  const [formData, setFormData] = useState<FormMetadata | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [formValues, setFormValues] = useState<Record<string, any>>({});
 
-  // Mock form data
-  const formData = {
-    title: "Customer Feedback Survey",
-    description: "Collect feedback from our customers. Your responses are end-to-end encrypted and stored securely on a decentralized network.",
-    status: "active" as "active" | "paused" | "closed", // Change this to test different statuses
+  useEffect(() => {
+    if (id && typeof id === 'string') {
+      const metadata = loadFormMetadata(id);
+      if (metadata) {
+        setFormData(metadata);
+      }
+      setLoading(false);
+    }
+  }, [id]);
+
+  const handleInputChange = (fieldId: string, value: any) => {
+    setFormValues(prev => ({
+      ...prev,
+      [fieldId]: value
+    }));
   };
-
-  // Mock form fields
-  const formFields = [
-    { id: "1", type: "text", label: "Full Name", placeholder: "Enter your full name", required: true },
-    { id: "2", type: "email", label: "Email Address", placeholder: "your.email@example.com", required: true },
-    { id: "3", type: "textarea", label: "Message", placeholder: "Share your feedback with us...", required: false },
-  ];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // Simulate form submission
+    console.log('Form submitted:', formValues);
     setTimeout(() => {
       setSubmitted(true);
     }, 500);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading form...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!formData) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20 flex items-center justify-center p-4">
+        <Card className="w-full max-w-2xl text-center border-2">
+          <CardContent className="pt-12 pb-10">
+            <h2 className="text-4xl font-bold mb-4">Form Not Found</h2>
+            <p className="text-lg text-muted-foreground mb-8">
+              The form you're looking for doesn't exist or has been deleted.
+            </p>
+            <Button onClick={() => router.push('/')} size="lg">
+              Go to Dashboard
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (submitted) {
     return (
@@ -170,28 +210,164 @@ export default function FormPreview() {
 
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-6 sm:space-y-7">
-              {formFields.map((field) => (
+              {formData.fields.map((field) => (
                 <div key={field.id} className="space-y-2.5">
                   <Label htmlFor={field.id} className="text-base font-semibold">
                     {field.label}
                     {field.required && <span className="text-destructive ml-1">*</span>}
                   </Label>
-                  {field.type === "textarea" ? (
+                  
+                  {/* Text Input */}
+                  {field.type === "text" && (
+                    <Input
+                      id={field.id}
+                      type="text"
+                      placeholder={field.placeholder}
+                      required={field.required}
+                      value={formValues[field.id] || ''}
+                      onChange={(e) => handleInputChange(field.id, e.target.value)}
+                      minLength={field.validation?.minLength}
+                      maxLength={field.validation?.maxLength}
+                      pattern={field.validation?.pattern}
+                      className="h-11"
+                    />
+                  )}
+                  
+                  {/* Email Input */}
+                  {field.type === "email" && (
+                    <Input
+                      id={field.id}
+                      type="email"
+                      placeholder={field.placeholder}
+                      required={field.required}
+                      value={formValues[field.id] || ''}
+                      onChange={(e) => handleInputChange(field.id, e.target.value)}
+                      className="h-11"
+                    />
+                  )}
+                  
+                  {/* Number Input */}
+                  {field.type === "number" && (
+                    <Input
+                      id={field.id}
+                      type="number"
+                      placeholder={field.placeholder}
+                      required={field.required}
+                      value={formValues[field.id] || ''}
+                      onChange={(e) => handleInputChange(field.id, e.target.value)}
+                      className="h-11"
+                    />
+                  )}
+                  
+                  {/* Phone Input */}
+                  {field.type === "phone" && (
+                    <Input
+                      id={field.id}
+                      type="tel"
+                      placeholder={field.placeholder}
+                      required={field.required}
+                      value={formValues[field.id] || ''}
+                      onChange={(e) => handleInputChange(field.id, e.target.value)}
+                      className="h-11"
+                    />
+                  )}
+                  
+                  {/* Date Input */}
+                  {field.type === "date" && (
+                    <Input
+                      id={field.id}
+                      type="date"
+                      required={field.required}
+                      value={formValues[field.id] || ''}
+                      onChange={(e) => handleInputChange(field.id, e.target.value)}
+                      className="h-11"
+                    />
+                  )}
+                  
+                  {/* Textarea */}
+                  {field.type === "textarea" && (
                     <Textarea
                       id={field.id}
                       placeholder={field.placeholder}
                       required={field.required}
+                      value={formValues[field.id] || ''}
+                      onChange={(e) => handleInputChange(field.id, e.target.value)}
+                      minLength={field.validation?.minLength}
+                      maxLength={field.validation?.maxLength}
                       rows={5}
                       className="resize-none"
                     />
-                  ) : (
-                    <Input
-                      id={field.id}
-                      type={field.type}
-                      placeholder={field.placeholder}
+                  )}
+                  
+                  {/* Select Dropdown */}
+                  {field.type === "select" && field.options && (
+                    <Select
+                      value={formValues[field.id]}
+                      onValueChange={(value) => handleInputChange(field.id, value)}
                       required={field.required}
-                      className="h-11"
-                    />
+                    >
+                      <SelectTrigger className="h-11">
+                        <SelectValue placeholder={field.placeholder || "Select an option"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {field.options.map((option) => (
+                          <SelectItem key={option.id} value={option.value}>
+                            {option.value}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  
+                  {/* Radio Group */}
+                  {field.type === "radio" && field.options && (
+                    <div className="space-y-2">
+                      {field.options.map((option) => (
+                        <div key={option.id} className="flex items-center space-x-2">
+                          <input
+                            type="radio"
+                            id={`${field.id}-${option.id}`}
+                            name={field.id}
+                            value={option.value}
+                            checked={formValues[field.id] === option.value}
+                            onChange={(e) => handleInputChange(field.id, e.target.value)}
+                            required={field.required}
+                            className="h-4 w-4"
+                          />
+                          <label
+                            htmlFor={`${field.id}-${option.id}`}
+                            className="text-sm font-normal leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                          >
+                            {option.value}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* Checkbox */}
+                  {field.type === "checkbox" && (
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id={field.id}
+                        checked={formValues[field.id] || false}
+                        onCheckedChange={(checked) => handleInputChange(field.id, checked)}
+                        required={field.required}
+                      />
+                      <label
+                        htmlFor={field.id}
+                        className="text-sm font-normal leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                      >
+                        {field.placeholder || field.label}
+                      </label>
+                    </div>
+                  )}
+                  
+                  {/* Validation Error Message */}
+                  {field.validation?.errorMessage && (
+                    <p className="text-xs text-muted-foreground">
+                      {field.validation.errorMessage}
+                    </p>
                   )}
                 </div>
               ))}

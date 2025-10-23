@@ -33,64 +33,115 @@ import {
   BarChart,
   FileText,
   X,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { loadFormMetadata, saveFormMetadata } from "@/lib/form-storage";
+import { FormMetadata, FormField } from "@/types/form";
 
 export default function EditForm() {
   const router = useRouter();
   const { id } = router.query;
 
-  // Mock form data
+  // State for loading
+  const [loading, setLoading] = useState(true);
+  const [formMetadata, setFormMetadata] = useState<FormMetadata | null>(null);
+
+  // Form data
   const [formData, setFormData] = useState({
-    title: "Customer Feedback Survey",
-    description: "Collect feedback from our customers",
+    title: "",
+    description: "",
+    status: "active" as "active" | "paused" | "closed",
   });
 
   const [isSaving, setIsSaving] = useState(false);
+  const [formFields, setFormFields] = useState<FormField[]>([]);
+
+  // Load form data on mount
+  useEffect(() => {
+    if (id && typeof id === 'string') {
+      const metadata = loadFormMetadata(id);
+      if (metadata) {
+        setFormMetadata(metadata);
+        setFormData({
+          title: metadata.title,
+          description: metadata.description,
+          status: metadata.status,
+        });
+        setFormFields(metadata.fields);
+      } else {
+        toast.error("Form not found", {
+          description: "The form you're trying to edit doesn't exist.",
+        });
+        router.push('/');
+      }
+      setLoading(false);
+    }
+  }, [id, router]);
 
   // Save form function
   const handleSaveForm = async () => {
+    if (!formMetadata) return;
+    
     setIsSaving(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setIsSaving(false);
-    toast.success("Form saved successfully!", {
-      description: "Your changes have been saved to the decentralized network.",
-    });
-  };
+    try {
+      const updatedMetadata: FormMetadata = {
+        ...formMetadata,
+        title: formData.title,
+        description: formData.description,
+        status: formData.status,
+        fields: formFields,
+        updatedAt: new Date().toISOString(),
+      };
 
-  // Mock form fields with state
-  const [formFields, setFormFields] = useState<Array<{
-    id: string;
-    type: string;
-    label: string;
-    placeholder?: string;
-    required: boolean;
-    options?: Array<{ id: string; value: string }>;
-  }>>([
-    { id: "1", type: "text", label: "Full Name", placeholder: "Enter your name", required: true },
-    { id: "2", type: "email", label: "Email Address", placeholder: "your@email.com", required: true },
-    { 
-      id: "3", 
-      type: "radio", 
-      label: "Preferred Contact Method", 
-      required: true,
-      options: [
-        { id: "opt1", value: "Email" },
-        { id: "opt2", value: "Phone" },
-        { id: "opt3", value: "SMS" },
-      ]
-    },
-    { id: "4", type: "textarea", label: "Additional Comments", placeholder: "Your feedback", required: false },
-  ]);
+      saveFormMetadata(updatedMetadata);
+      setFormMetadata(updatedMetadata);
+      
+      toast.success("Form saved successfully!", {
+        description: "Your changes have been saved.",
+      });
+    } catch (error) {
+      toast.error("Failed to save form", {
+        description: "Please try again.",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-muted/20 to-background flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading form...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show not found state
+  if (!formMetadata) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-muted/20 to-background flex items-center justify-center">
+        <Card className="max-w-md text-center">
+          <CardContent className="pt-6">
+            <h2 className="text-2xl font-bold mb-2">Form Not Found</h2>
+            <p className="text-muted-foreground mb-4">The form you're trying to edit doesn't exist.</p>
+            <Button onClick={() => router.push('/')}>Go to Dashboard</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // Drag handlers
   const handleDragStart = (index: number) => {
@@ -339,6 +390,44 @@ export default function EditForm() {
                     value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="form-status">Form Status</Label>
+                  <Select
+                    value={formData.status}
+                    onValueChange={(value: "active" | "paused" | "closed") => 
+                      setFormData({ ...formData, status: value })
+                    }
+                  >
+                    <SelectTrigger id="form-status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-green-500" />
+                          Active
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="paused">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-yellow-500" />
+                          Paused
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="closed">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-red-500" />
+                          Closed
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {formData.status === "active" && "Form is accepting responses"}
+                    {formData.status === "paused" && "Form is temporarily not accepting responses"}
+                    {formData.status === "closed" && "Form is permanently closed"}
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Privacy Settings</Label>

@@ -36,10 +36,12 @@ import {
   Smartphone,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/router";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { FormMetadata, FormField } from "@/types/form";
+import { saveFormMetadata, generateFormMetadataJSON } from "@/lib/form-storage";
 
 export default function CreateForm() {
   const router = useRouter();
@@ -67,33 +69,47 @@ export default function CreateForm() {
 
     setIsSaving(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setIsSaving(false);
-    toast.success("Form created successfully!", {
-      description: "Your form has been saved to the decentralized network.",
-    });
-    
-    // Optionally redirect to edit page
-    // router.push(`/forms/new-form-id/edit`);
+    try {
+      // Create form metadata JSON structure
+      const formId = `form-${Date.now()}`;
+      const now = new Date().toISOString();
+      
+      const formMetadata: FormMetadata = {
+        id: formId,
+        title: formData.title,
+        description: formData.description,
+        status: formData.status,
+        fields: formFields,
+        createdAt: now,
+        updatedAt: now,
+        version: "1.0.0",
+      };
+
+      // Save to localStorage (will be replaced with IPFS later)
+      saveFormMetadata(formMetadata);
+
+      // Generate JSON for download (optional)
+      const jsonContent = generateFormMetadataJSON(formMetadata);
+      console.log("Form metadata JSON:", jsonContent);
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      setIsSaving(false);
+      toast.success("Form created successfully!", {
+        description: "Your form has been saved as form-meta.json",
+      });
+      
+      // Redirect to preview page
+      router.push(`/forms/${formId}/preview`);
+    } catch (error) {
+      setIsSaving(false);
+      toast.error("Failed to save form");
+      console.error(error);
+    }
   };
 
   // Mock form fields with state
-  const [formFields, setFormFields] = useState<Array<{
-    id: string;
-    type: string;
-    label: string;
-    placeholder?: string;
-    required: boolean;
-    options?: Array<{ id: string; value: string }>;
-    validation?: {
-      minLength?: number;
-      maxLength?: number;
-      pattern?: string;
-      errorMessage?: string;
-    };
-  }>>([]);
+  const [formFields, setFormFields] = useState<FormField[]>([]);
 
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
