@@ -20,13 +20,17 @@ import { QRCodeSVG } from "qrcode.react";
 interface ShareFormDialogProps {
   formId: string;
   formTitle: string;
+  formCid?: string; // Optional CID for IPFS link
 }
 
-export function ShareFormDialog({ formId, formTitle }: ShareFormDialogProps) {
+export function ShareFormDialog({ formId, formTitle, formCid }: ShareFormDialogProps) {
   const [copied, setCopied] = useState(false);
   const [embedCopied, setEmbedCopied] = useState(false);
 
-  const formUrl = `https://privateform.app/f/${formId}`;
+  // Use CID if available, otherwise use formId
+  const formUrl = formCid 
+    ? `${typeof window !== 'undefined' ? window.location.origin : ''}/forms/view/${formCid}`
+    : `https://privateform.app/f/${formId}`;
   const embedCode = `<iframe src="${formUrl}" width="100%" height="600" frameborder="0"></iframe>`;
 
   const copyToClipboard = (text: string, type: "url" | "embed") => {
@@ -62,6 +66,7 @@ export function ShareFormDialog({ formId, formTitle }: ShareFormDialogProps) {
           <DialogTitle className="text-2xl">Share Form</DialogTitle>
           <DialogDescription>
             Share "{formTitle}" with others via link, QR code, or embed it on your website
+            {formCid && <span className="block mt-1 text-primary">✓ Stored on IPFS (Decentralized)</span>}
           </DialogDescription>
         </DialogHeader>
 
@@ -75,7 +80,7 @@ export function ShareFormDialog({ formId, formTitle }: ShareFormDialogProps) {
 
           <TabsContent value="link" className="space-y-4 mt-4">
             <div className="space-y-2">
-              <Label>Public Form URL</Label>
+              <Label>Public Form URL {formCid && <span className="text-primary text-xs">(IPFS)</span>}</Label>
               <div className="flex gap-2">
                 <Input value={formUrl} readOnly className="font-mono text-sm" />
                 <Button
@@ -91,8 +96,15 @@ export function ShareFormDialog({ formId, formTitle }: ShareFormDialogProps) {
                 </Button>
               </div>
               <p className="text-sm text-muted-foreground">
-                Anyone with this link can access and submit your form
+                {formCid 
+                  ? "This form is stored on IPFS - it's decentralized and permanent"
+                  : "Anyone with this link can access and submit your form"}
               </p>
+              {formCid && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  CID: <code className="bg-muted px-1.5 py-0.5 rounded">{formCid.substring(0, 20)}...</code>
+                </p>
+              )}
             </div>
           </TabsContent>
 

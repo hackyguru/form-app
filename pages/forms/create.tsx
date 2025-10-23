@@ -42,6 +42,8 @@ import { useRouter } from "next/router";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { FormMetadata, FormField } from "@/types/form";
 import { saveFormMetadata, generateFormMetadataJSON } from "@/lib/form-storage";
+import { uploadFormToIPFS, saveCIDMapping } from "@/lib/storacha";
+import { createIPNSName, publishToIPNS, saveIPNSKey, saveIPNSMapping } from "@/lib/ipns";
 
 export default function CreateForm() {
   const router = useRouter();
@@ -85,22 +87,52 @@ export default function CreateForm() {
         version: "1.0.0",
       };
 
-      // Save to localStorage (will be replaced with IPFS later)
+      // Step 1: Upload to IPFS via Storacha
+      toast.info("Uploading form to IPFS...", {
+        description: "This may take a few moments",
+      });
+
+      const cid = await uploadFormToIPFS(formMetadata);
+      console.log("Form uploaded to IPFS. CID:", cid);
+
+      // Step 2: Create IPNS name (permanent address)
+      toast.info("Creating permanent IPNS address...", {
+        description: "Your form will have an updateable link",
+      });
+
+      const { name, nameObj } = await createIPNSName();
+      console.log("IPNS name created:", name);
+
+      // Step 3: Publish CID to IPNS
+      toast.info("Publishing to IPNS...", {
+        description: "Linking your form to the permanent address",
+      });
+
+      await publishToIPNS(nameObj, cid);
+      console.log("Published CID to IPNS:", name, "→", cid);
+
+      // Step 4: Save IPNS data for future updates
+      await saveIPNSKey(formId, nameObj);
+      saveIPNSMapping(formId, name);
+      
+      // Also save CID mapping as backup
+      saveCIDMapping(formId, cid);
+
+      // Also save to localStorage as backup
       saveFormMetadata(formMetadata);
 
       // Generate JSON for download (optional)
       const jsonContent = generateFormMetadataJSON(formMetadata);
       console.log("Form metadata JSON:", jsonContent);
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
       
       setIsSaving(false);
       toast.success("Form created successfully!", {
-        description: "Your form has been saved as form-meta.json",
+        description: `Your form has a permanent link that can be updated! IPNS: ${name.substring(0, 16)}...`,
+        duration: 5000,
       });
       
-      // Redirect to preview page
-      router.push(`/forms/${formId}/preview`);
+      // Redirect to IPNS view page (permanent link!)
+      router.push(`/forms/view/${name}`);
     } catch (error) {
       setIsSaving(false);
       toast.error("Failed to save form");

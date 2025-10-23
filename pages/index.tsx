@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { PlusCircle, FileText, Eye, BarChart, Shield, Lock, TrendingUp, Copy, Trash2, MoreVertical } from "lucide-react";
+import { PlusCircle, FileText, Eye, BarChart, Shield, Lock, TrendingUp, Copy, Trash2, MoreVertical, Link as LinkIcon, AlertTriangle } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +18,8 @@ import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { loadAllForms, deleteFormMetadata, duplicateForm } from "@/lib/form-storage";
 import { FormMetadata } from "@/types/form";
+import { getAllFormsFromIPFS, getCIDMappings, getCIDForForm, deleteCIDMapping, uploadFormToIPFS, saveCIDMapping } from "@/lib/storacha";
+import { getIPNSName, getIPNSNameObject, publishToIPNS, createIPNSName, saveIPNSKey, saveIPNSMapping, deleteIPNSKey, deleteIPNSMapping } from "@/lib/ipns";
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
@@ -26,12 +28,58 @@ export default function Home() {
   const [duplicatingFormId, setDuplicatingFormId] = useState<string | null>(null);
   const [deletingFormId, setDeletingFormId] = useState<string | null>(null);
   const [forms, setForms] = useState<FormMetadata[]>([]);
+  const [ipnsStatuses, setIpnsStatuses] = useState<Record<string, 'full' | 'partial' | 'none'>>({});
+
+  // Check if form has valid IPNS (both name and key)
+  const getIPNSStatus = async (formId: string): Promise<'full' | 'partial' | 'none'> => {
+    const ipnsName = getIPNSName(formId);
+    if (!ipnsName) return 'none';
+    
+    const nameObj = await getIPNSNameObject(formId);
+    return nameObj ? 'full' : 'partial';
+  };
 
   useEffect(() => {
     const loadForms = async () => {
-      // Load forms from localStorage
-      const savedForms = loadAllForms();
-      setForms(savedForms);
+      try {
+        // Try to load forms from IPFS first
+        const ipfsForms = await getAllFormsFromIPFS();
+        
+        if (ipfsForms.length > 0) {
+          setForms(ipfsForms);
+          
+          // Load IPNS statuses for each form
+          const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
+          for (const form of ipfsForms) {
+            statuses[form.id] = await getIPNSStatus(form.id);
+          }
+          setIpnsStatuses(statuses);
+        } else {
+          // Fallback to localStorage if no IPFS forms
+          const savedForms = loadAllForms();
+          setForms(savedForms);
+          
+          // Load IPNS statuses
+          const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
+          for (const form of savedForms) {
+            statuses[form.id] = await getIPNSStatus(form.id);
+          }
+          setIpnsStatuses(statuses);
+        }
+      } catch (error) {
+        console.error('Error loading forms:', error);
+        // Fallback to localStorage on error
+        const savedForms = loadAllForms();
+        setForms(savedForms);
+        
+        // Load IPNS statuses
+        const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
+        for (const form of savedForms) {
+          statuses[form.id] = await getIPNSStatus(form.id);
+        }
+        setIpnsStatuses(statuses);
+      }
+      
       await new Promise(resolve => setTimeout(resolve, 1500));
       setIsLoading(false);
     };
@@ -40,14 +88,34 @@ export default function Home() {
 
   const handleDuplicateForm = async (formId: string, formTitle: string) => {
     setDuplicatingFormId(formId);
-    await new Promise(resolve => setTimeout(resolve, 800));
     
-    const duplicated = duplicateForm(formId);
-    if (duplicated) {
-      setForms(prev => [...prev, duplicated]);
-      toast.success(`"${formTitle}" has been duplicated!`);
-    } else {
-      toast.error("Failed to duplicate form");
+    try {
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      const duplicated = duplicateForm(formId);
+      if (duplicated) {
+        // Upload duplicate to IPFS
+        toast.info("Uploading duplicate to IPFS...");
+        const cid = await uploadFormToIPFS(duplicated);
+        
+        // Create new IPNS name for duplicate
+        toast.info("Creating IPNS for duplicate...");
+        const { name, nameObj } = await createIPNSName();
+        await publishToIPNS(nameObj, cid);
+        
+        // Save IPNS data
+        await saveIPNSKey(duplicated.id, nameObj);
+        saveIPNSMapping(duplicated.id, name);
+        saveCIDMapping(duplicated.id, cid);
+        
+        setForms(prev => [...prev, duplicated]);
+        toast.success(`"${formTitle}" has been duplicated with IPNS!`);
+      } else {
+        toast.error("Failed to duplicate form");
+      }
+    } catch (error) {
+      console.error('Error duplicating form:', error);
+      toast.error("Failed to upload duplicate to IPFS");
     }
     
     setDuplicatingFormId(null);
@@ -58,7 +126,16 @@ export default function Home() {
       setDeletingFormId(formToDelete);
       await new Promise(resolve => setTimeout(resolve, 600));
       
+      // Delete from localStorage
       deleteFormMetadata(formToDelete);
+      
+      // Delete CID mapping
+      deleteCIDMapping(formToDelete);
+      
+      // Delete IPNS data
+      await deleteIPNSKey(formToDelete);
+      deleteIPNSMapping(formToDelete);
+      
       setForms(prev => prev.filter(f => f.id !== formToDelete));
       
       toast.success("Form deleted successfully");
@@ -225,6 +302,26 @@ export default function Home() {
                           >
                             {form.status.charAt(0).toUpperCase() + form.status.slice(1)}
                           </Badge>
+                          {ipnsStatuses[form.id] === 'full' && (
+                            <Badge 
+                              variant="outline" 
+                              className="bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20"
+                              title="Updateable permanent link (IPNS)"
+                            >
+                              <LinkIcon className="h-3 w-3 mr-1" />
+                              IPNS
+                            </Badge>
+                          )}
+                          {ipnsStatuses[form.id] === 'partial' && (
+                            <Badge 
+                              variant="outline" 
+                              className="bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20"
+                              title="IPNS link exists but signing key missing (will be recreated on edit)"
+                            >
+                              <AlertTriangle className="h-3 w-3 mr-1" />
+                              IPNS⚠
+                            </Badge>
+                          )}
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button 
@@ -276,14 +373,18 @@ export default function Home() {
                               Edit
                             </Button>
                           </Link>
-                          <Link href={`/forms/${form.id}/responses`} className="flex-1">
+                          <Link href={`/forms/view/${getIPNSName(form.id) || getCIDForForm(form.id) || form.id}`} className="flex-1">
                             <Button variant="outline" className="w-full group/btn" size="sm">
-                              <BarChart className="mr-2 h-4 w-4 group-hover/btn:scale-110 transition-transform" />
+                              <Eye className="mr-2 h-4 w-4 group-hover/btn:scale-110 transition-transform" />
                               View
                             </Button>
                           </Link>
                         </div>
-                        <ShareFormDialog formId={form.id} formTitle={form.title} />
+                        <ShareFormDialog 
+                          formId={form.id} 
+                          formTitle={form.title} 
+                          formCid={getIPNSName(form.id) || getCIDForForm(form.id) || undefined} 
+                        />
                       </div>
                     </CardContent>
                   </Card>

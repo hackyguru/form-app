@@ -41,6 +41,8 @@ import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { loadFormMetadata, saveFormMetadata } from "@/lib/form-storage";
 import { FormMetadata, FormField } from "@/types/form";
+import { uploadFormToIPFS, saveCIDMapping } from "@/lib/storacha";
+import { getIPNSNameObject, getIPNSName, updateIPNS, createIPNSName, publishToIPNS, saveIPNSKey, saveIPNSMapping } from "@/lib/ipns";
 
 export default function EditForm() {
   const router = useRouter();
@@ -82,7 +84,7 @@ export default function EditForm() {
     }
   }, [id, router]);
 
-  // Save form function
+  // Save form function with IPNS update
   const handleSaveForm = async () => {
     if (!formMetadata) return;
     
@@ -98,16 +100,107 @@ export default function EditForm() {
         updatedAt: new Date().toISOString(),
       };
 
+      // Step 1: Upload updated form to IPFS (new CID)
+      toast.info("Uploading updated form to IPFS...");
+      const newCid = await uploadFormToIPFS(updatedMetadata);
+      console.log("Updated form uploaded. New CID:", newCid);
+
+      // Step 2: Update IPNS to point to new CID (if available)
+      const ipnsName = getIPNSName(formMetadata.id);
+      if (ipnsName) {
+        // Try to get the signing key
+        const nameObj = await getIPNSNameObject(formMetadata.id);
+        
+        if (nameObj) {
+          // We have the key! Update IPNS
+          toast.info("Updating IPNS...", {
+            description: "Your permanent link will show the updated form",
+          });
+          
+          try {
+            await updateIPNS(nameObj, newCid);
+            console.log("IPNS updated:", ipnsName, "→", newCid);
+            
+            toast.success("Form updated successfully!", {
+              description: "Your permanent link now shows the updated form!",
+            });
+          } catch (ipnsError) {
+            console.error("IPNS update failed:", ipnsError);
+            toast.warning("Form saved to IPFS, but IPNS update failed", {
+              description: "The form is saved but the permanent link may show old version",
+            });
+          }
+        } else {
+          // IPNS name exists but no signing key - create a NEW IPNS!
+          console.warn("IPNS name exists but signing key not found. Creating new IPNS...");
+          toast.info("Recreating IPNS with new key...", {
+            description: "Lost signing key - creating fresh permanent link",
+          });
+          
+          try {
+            // Create brand new IPNS name with new key
+            const { name, nameObj } = await createIPNSName();
+            console.log("New IPNS name created:", name);
+            
+            // Publish the new CID to this new IPNS
+            await publishToIPNS(nameObj, newCid);
+            console.log("Published CID to new IPNS:", name, "→", newCid);
+            
+            // Save the new IPNS key and update mapping
+            await saveIPNSKey(formMetadata.id, nameObj);
+            saveIPNSMapping(formMetadata.id, name);
+            
+            toast.success("Form updated with NEW permanent link!", {
+              description: `New IPNS: ${name.slice(0, 20)}... (old link won't update anymore)`,
+            });
+          } catch (recreateError) {
+            console.error("Failed to recreate IPNS:", recreateError);
+            toast.warning("Form updated to IPFS only", {
+              description: "IPNS signing key not found. Form saved with new CID.",
+            });
+          }
+        }
+      } else {
+        // No IPNS at all - create one for this form!
+        console.log("No IPNS name found, creating new one...");
+        toast.info("Creating permanent IPNS link...", {
+          description: "This will make future updates easier",
+        });
+        
+        try {
+          // Create new IPNS name
+          const { name, nameObj } = await createIPNSName();
+          console.log("IPNS name created:", name);
+          
+          // Publish the new CID to IPNS
+          await publishToIPNS(nameObj, newCid);
+          console.log("Published CID to IPNS:", name, "→", newCid);
+          
+          // Save the IPNS key and mapping
+          await saveIPNSKey(formMetadata.id, nameObj);
+          saveIPNSMapping(formMetadata.id, name);
+          
+          toast.success("Form updated with permanent link!", {
+            description: `Your form now has a permanent IPNS address: ${name.slice(0, 20)}...`,
+          });
+        } catch (ipnsCreateError) {
+          console.error("Failed to create IPNS:", ipnsCreateError);
+          toast.success("Form updated!", {
+            description: "Saved to IPFS (IPNS creation skipped)",
+          });
+        }
+      }
+
+      // Step 3: Save locally as backup
       saveFormMetadata(updatedMetadata);
+      saveCIDMapping(formMetadata.id, newCid);
       setFormMetadata(updatedMetadata);
       
-      toast.success("Form saved successfully!", {
-        description: "Your changes have been saved.",
-      });
     } catch (error) {
       toast.error("Failed to save form", {
-        description: "Please try again.",
+        description: error instanceof Error ? error.message : "Please try again.",
       });
+      console.error("Save error:", error);
     } finally {
       setIsSaving(false);
     }
