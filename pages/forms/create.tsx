@@ -42,17 +42,28 @@ import { useRouter } from "next/router";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { FormMetadata, FormField } from "@/types/form";
 import { saveFormMetadata, generateFormMetadataJSON } from "@/lib/form-storage";
-import { uploadFormToIPFS, saveCIDMapping } from "@/lib/storacha";
+import { uploadFormToIPFS, saveCIDMapping, uploadJSONToIPFS } from "@/lib/storacha";
 import { createIPNSName, publishToIPNS, saveIPNSKey, saveIPNSMapping } from "@/lib/ipns";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
+import type { PrivacyMode } from "@/lib/blockchain-types";
+import { registerFormOnChain } from "@/lib/blockchain-client";
+import { 
+  requestEncryptionSignature, 
+  encryptIPNSKeyForStorage 
+} from "@/lib/crypto-utils";
 
 export default function CreateForm() {
   const router = useRouter();
+  const { ready, authenticated, login, user } = usePrivy();
+  const { wallets } = useWallets();
   
   const [formData, setFormData] = useState({
     title: "Untitled Form",
     description: "",
     status: "active" as "active" | "paused" | "closed",
   });
+
+  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>("identified");
 
   const [isSaving, setIsSaving] = useState(false);
   const [previewMode, setPreviewMode] = useState<"desktop" | "tablet" | "mobile">("desktop");
@@ -124,6 +135,106 @@ export default function CreateForm() {
       // Generate JSON for download (optional)
       const jsonContent = generateFormMetadataJSON(formMetadata);
       console.log("Form metadata JSON:", jsonContent);
+
+      // Step 5: Encrypt and backup IPNS key (for multi-device access)
+      let encryptedKeyCID = "";
+      if (user?.wallet?.address && wallets.length > 0) {
+        try {
+          toast.info("Encrypting IPNS key...", {
+            description: "Enabling multi-device access",
+          });
+
+          // Get the IPNS private key bytes (nameObj.key.raw per w3name API)
+          const ipnsPrivateKey = Buffer.from(nameObj.key.raw).toString('base64');
+
+          // Get the user's wallet for signing
+          const wallet = wallets[0];
+          
+          // Use Privy's wallet provider to sign
+          const provider = await wallet.getEthereumProvider();
+          const walletAddress = user?.wallet?.address || '';
+          
+          const signMessageFn = async (message: string) => {
+            const signature = await provider.request({
+              method: 'personal_sign',
+              params: [message, walletAddress],
+            }) as string;
+            return signature;
+          };
+
+          // Request signature from wallet
+          const signature = await requestEncryptionSignature(
+            walletAddress,
+            signMessageFn
+          );
+
+          // Encrypt the IPNS key with wallet signature
+          const encryptedKeyJson = await encryptIPNSKeyForStorage(
+            ipnsPrivateKey,
+            formId,
+            user.wallet.address,
+            signature
+          );
+
+          // Upload encrypted key to IPFS
+          toast.info("Backing up encrypted key to IPFS...", {
+            description: "You'll be able to edit from any device",
+          });
+
+          // Upload using the reusable uploadJSONToIPFS function
+          const keyCID = await uploadJSONToIPFS(encryptedKeyJson, 'encrypted-key.json');
+          encryptedKeyCID = keyCID;
+
+          console.log("✅ Encrypted IPNS key backed up to IPFS:", encryptedKeyCID);
+
+          toast.success("Multi-device access enabled!", {
+            description: "You can now edit this form from any device",
+            duration: 3000,
+          });
+        } catch (encryptError) {
+          console.error("Failed to encrypt/backup IPNS key:", encryptError);
+          toast.warning("Key encryption failed", {
+            description: "Form saved but editing limited to this device",
+            duration: 5000,
+          });
+          // Don't fail the entire operation
+          encryptedKeyCID = ""; // Empty string fallback
+        }
+      }
+
+      // Step 6: Register on blockchain (if authenticated)
+      if (user?.wallet?.address && encryptedKeyCID) {
+        try {
+          toast.info("Registering on blockchain...", {
+            description: "Recording your form on Status Network",
+          });
+
+          const blockchainResult = await registerFormOnChain(
+            formId,
+            name,
+            encryptedKeyCID,
+            user.wallet.address,
+            privacyMode
+          );
+
+          console.log("✅ Form registered on blockchain:", {
+            txHash: blockchainResult.txHash,
+            explorer: blockchainResult.explorerUrl,
+          });
+
+          toast.success("Form registered on blockchain!", {
+            description: `Transaction: ${blockchainResult.txHash?.substring(0, 10)}...`,
+            duration: 3000,
+          });
+        } catch (blockchainError) {
+          console.error("Failed to register on blockchain:", blockchainError);
+          toast.warning("Form saved but blockchain registration failed", {
+            description: "Your form is still accessible via IPFS",
+            duration: 5000,
+          });
+          // Don't fail the entire operation if blockchain fails
+        }
+      }
       
       setIsSaving(false);
       toast.success("Form created successfully!", {
@@ -327,6 +438,110 @@ export default function CreateForm() {
     { icon: Calendar, label: "Date", value: "date" },
   ];
 
+  // Show loading state while auth is initializing
+  if (!ready) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20 flex items-center justify-center">
+        <Card className="w-full max-w-md mx-4">
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mb-4"></div>
+            <p className="text-lg font-semibold">Loading...</p>
+            <p className="text-sm text-muted-foreground">Please wait</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Show authentication required UI if not authenticated
+  if (!authenticated) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20">
+        {/* Header */}
+        <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
+          <div className="container mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex h-16 items-center justify-between">
+              <Link href="/" className="flex items-center gap-3 group">
+                <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                  <Shield className="h-4 w-4 text-primary" />
+                </div>
+                <div className="hidden sm:block">
+                  <h1 className="text-lg font-bold">Create New Form</h1>
+                  <p className="text-xs text-muted-foreground">Build your privacy-first form</p>
+                </div>
+              </Link>
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                <Button size="sm" onClick={login}>
+                  <Shield className="mr-2 h-4 w-4" />
+                  Connect Wallet
+                </Button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+          <div className="max-w-2xl mx-auto">
+            <Card className="border-2 border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-16 sm:py-20 text-center">
+                <div className="p-4 bg-primary/10 rounded-full mb-6">
+                  <Shield className="h-12 w-12 text-primary" />
+                </div>
+                <h2 className="text-2xl sm:text-3xl font-bold mb-3">Authentication Required</h2>
+                <p className="text-muted-foreground mb-6 max-w-md">
+                  Please connect your wallet or sign in to create forms. Your forms will be securely stored on IPFS with your account.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button size="lg" onClick={login} className="gap-2">
+                    <Shield className="h-5 w-5" />
+                    Connect Wallet
+                  </Button>
+                  <Button size="lg" variant="outline" onClick={() => router.push("/")}>
+                    <ArrowLeft className="mr-2 h-5 w-5" />
+                    Back to Dashboard
+                  </Button>
+                </div>
+                <div className="mt-8 pt-8 border-t w-full max-w-md">
+                  <p className="text-sm text-muted-foreground mb-4 font-medium">Why do I need to sign in?</p>
+                  <div className="space-y-3 text-left">
+                    <div className="flex gap-3">
+                      <div className="p-1.5 bg-primary/10 rounded-full h-fit">
+                        <Shield className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Your forms, your control</p>
+                        <p className="text-xs text-muted-foreground">All forms are linked to your account for easy management</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="p-1.5 bg-primary/10 rounded-full h-fit">
+                        <Shield className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">End-to-end encrypted</p>
+                        <p className="text-xs text-muted-foreground">Your data is encrypted and only you can access it</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="p-1.5 bg-primary/10 rounded-full h-fit">
+                        <Shield className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Decentralized storage</p>
+                        <p className="text-xs text-muted-foreground">Forms are stored on IPFS, not our servers</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20">
       {/* Header */}
@@ -397,8 +612,127 @@ export default function CreateForm() {
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   />
                 </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <Label className="text-sm font-semibold">Response Privacy Mode</Label>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Choose how you want to handle submitter identities
+                  </p>
+                  
+                  <div className="space-y-2">
+                    {/* Identified Mode */}
+                    <div
+                      onClick={() => setPrivacyMode("identified")}
+                      className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                        privacyMode === "identified"
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                          privacyMode === "identified" ? "border-primary" : "border-muted-foreground"
+                        }`}>
+                          {privacyMode === "identified" && (
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-semibold text-sm">Identity Collection Mode</p>
+                            <Badge variant="secondary" className="text-xs">Flexible</Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Track who submits responses (users can still submit anonymously)
+                          </p>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <CheckSquare className="h-3 w-3 text-primary" />
+                              <span>Records wallet addresses when users connect</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <CheckSquare className="h-3 w-3 text-primary" />
+                              <span>Shows verified badge for authenticated users</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <CheckSquare className="h-3 w-3 text-primary" />
+                              <span>Still allows anonymous submissions</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Anonymous Mode */}
+                    <div
+                      onClick={() => setPrivacyMode("anonymous")}
+                      className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                        privacyMode === "anonymous"
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                          privacyMode === "anonymous" ? "border-primary" : "border-muted-foreground"
+                        }`}>
+                          {privacyMode === "anonymous" && (
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-semibold text-sm">Anonymous Mode</p>
+                            <Badge variant="secondary" className="text-xs">Maximum Privacy</Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Complete privacy - no identity tracking at all
+                          </p>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Shield className="h-3 w-3 text-primary" />
+                              <span>No wallet addresses stored</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Shield className="h-3 w-3 text-primary" />
+                              <span>50% cheaper gas costs</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Shield className="h-3 w-3 text-primary" />
+                              <span>Fully anonymous responses only</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Info box based on selection */}
+                  <div className={`p-3 rounded-md text-xs ${
+                    privacyMode === "identified" 
+                      ? "bg-blue-500/10 text-blue-900 dark:text-blue-300"
+                      : "bg-purple-500/10 text-purple-900 dark:text-purple-300"
+                  }`}>
+                    {privacyMode === "identified" ? (
+                      <p>
+                        <strong>Flexible Mode:</strong> Submitters can choose to link their wallet or remain anonymous. 
+                        This mode tracks addresses when users connect, but still allows anonymous submissions.
+                      </p>
+                    ) : (
+                      <p>
+                        <strong>Privacy First:</strong> All responses are completely anonymous with no identity information stored. 
+                        This provides maximum privacy and reduces blockchain gas costs by 50%.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <Separator />
+
                 <div className="space-y-2">
-                  <Label>Privacy Settings</Label>
+                  <Label>Encryption</Label>
                   <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
                     <Shield className="h-4 w-4 text-primary" />
                     <div className="flex-1">

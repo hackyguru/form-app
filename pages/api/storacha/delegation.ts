@@ -35,9 +35,21 @@ export default async function handler(
     
     // 24 hours expiration
     const expiration = Math.floor(Date.now() / 1000) + (60 * 60 * 24);
+    
+    // Grant all necessary capabilities including space/blob/add
     const delegation = await client.createDelegation(
       audience, 
-      ['store/add', 'upload/add'], 
+      [
+        'space/blob/add',
+        'space/index/add',
+        'filecoin/offer',
+        'upload/add',
+        'store/add',
+        'store/list',
+        'store/remove',
+        'upload/list',
+        'upload/remove'
+      ], 
       { expiration }
     );
 

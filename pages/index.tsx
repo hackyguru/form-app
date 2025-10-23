@@ -11,17 +11,22 @@ import {
 } from "@/components/ui/dropdown-menu";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ConnectButton } from "@/components/auth/connect-button";
 import { ShareFormDialog } from "@/components/share-form-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DashboardSkeleton } from "@/components/skeleton-loaders";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
-import { loadAllForms, deleteFormMetadata, duplicateForm } from "@/lib/form-storage";
+import { loadAllForms, deleteFormMetadata, duplicateForm, markFormAsDeleted, isFormDeleted } from "@/lib/form-storage";
 import { FormMetadata } from "@/types/form";
 import { getAllFormsFromIPFS, getCIDMappings, getCIDForForm, deleteCIDMapping, uploadFormToIPFS, saveCIDMapping } from "@/lib/storacha";
 import { getIPNSName, getIPNSNameObject, publishToIPNS, createIPNSName, saveIPNSKey, saveIPNSMapping, deleteIPNSKey, deleteIPNSMapping } from "@/lib/ipns";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { getUserFormsFromBlockchain, checkRestoreStatus } from "@/lib/ipns-restore";
 
 export default function Home() {
+  const { authenticated, login, user } = usePrivy();
+  const { wallets } = useWallets();
   const [isLoading, setIsLoading] = useState(true);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [formToDelete, setFormToDelete] = useState<string | null>(null);
@@ -29,6 +34,7 @@ export default function Home() {
   const [deletingFormId, setDeletingFormId] = useState<string | null>(null);
   const [forms, setForms] = useState<FormMetadata[]>([]);
   const [ipnsStatuses, setIpnsStatuses] = useState<Record<string, 'full' | 'partial' | 'none'>>({});
+  const [needsRestore, setNeedsRestore] = useState(0);
 
   // Check if form has valid IPNS (both name and key)
   const getIPNSStatus = async (formId: string): Promise<'full' | 'partial' | 'none'> => {
@@ -42,39 +48,98 @@ export default function Home() {
   useEffect(() => {
     const loadForms = async () => {
       try {
-        // Try to load forms from IPFS first
-        const ipfsForms = await getAllFormsFromIPFS();
-        
-        if (ipfsForms.length > 0) {
-          setForms(ipfsForms);
+        let loadedForms: FormMetadata[] = [];
+
+        // If authenticated, fetch forms from blockchain first
+        if (authenticated && user?.wallet?.address) {
+          console.log('📡 Fetching forms from blockchain for:', user.wallet.address);
           
-          // Load IPNS statuses for each form
-          const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
-          for (const form of ipfsForms) {
-            statuses[form.id] = await getIPNSStatus(form.id);
-          }
-          setIpnsStatuses(statuses);
-        } else {
-          // Fallback to localStorage if no IPFS forms
-          const savedForms = loadAllForms();
-          setForms(savedForms);
+          const blockchainForms = await getUserFormsFromBlockchain(user.wallet.address);
+          console.log(`Found ${blockchainForms.length} forms on blockchain`);
+
+          // For each blockchain form, try to fetch metadata from IPFS via IPNS
+          const { getFormFromIPFS } = await import('@/lib/storacha');
+          const { saveFormMetadata } = await import('@/lib/form-storage');
           
-          // Load IPNS statuses
-          const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
-          for (const form of savedForms) {
-            statuses[form.id] = await getIPNSStatus(form.id);
+          for (const bcForm of blockchainForms) {
+            try {
+              // Skip if form is marked as deleted
+              if (isFormDeleted(bcForm.formId)) {
+                console.log(`⏭️ Skipping deleted form: ${bcForm.formId}`);
+                continue;
+              }
+
+              // Resolve IPNS to get the form content
+              const formMetadata = await getFormFromIPFS(bcForm.ipnsName);
+              if (formMetadata) {
+                loadedForms.push(formMetadata);
+                
+                // Save to localStorage for offline access and faster loading
+                saveFormMetadata(formMetadata);
+                
+                // Save IPNS mapping to localStorage for quick access
+                saveIPNSMapping(formMetadata.id, bcForm.ipnsName);
+                
+                // Save CID mapping (get current CID from IPNS)
+                const { resolveIPNS } = await import('@/lib/ipns');
+                const currentCID = await resolveIPNS(bcForm.ipnsName);
+                if (currentCID) {
+                  saveCIDMapping(formMetadata.id, currentCID);
+                }
+                
+                console.log(`✅ Cached form: ${formMetadata.title}`);
+              }
+            } catch (error) {
+              console.error(`Failed to load form ${bcForm.formId}:`, error);
+            }
           }
-          setIpnsStatuses(statuses);
+
+          // Check restore status
+          const restoreStatus = await checkRestoreStatus(user.wallet.address);
+          setNeedsRestore(restoreStatus.needsRestore);
+          
+          if (restoreStatus.needsRestore > 0) {
+            toast.info(`${restoreStatus.needsRestore} form(s) need key restoration`, {
+              description: 'Click "Restore Keys" to edit them on this device',
+              duration: 6000,
+            });
+          }
         }
+
+        // Fallback: Try IPFS CID mappings from localStorage
+        if (loadedForms.length === 0) {
+          const ipfsForms = await getAllFormsFromIPFS();
+          loadedForms = ipfsForms;
+        }
+
+        // Final fallback: localStorage
+        if (loadedForms.length === 0) {
+          loadedForms = loadAllForms();
+        }
+
+        // Filter out deleted forms from all sources
+        loadedForms = loadedForms.filter(form => !isFormDeleted(form.id));
+
+        setForms(loadedForms);
+        
+        // Load IPNS statuses for each form
+        const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
+        for (const form of loadedForms) {
+          statuses[form.id] = await getIPNSStatus(form.id);
+        }
+        setIpnsStatuses(statuses);
+
       } catch (error) {
         console.error('Error loading forms:', error);
         // Fallback to localStorage on error
         const savedForms = loadAllForms();
-        setForms(savedForms);
+        // Filter out deleted forms
+        const activeForms = savedForms.filter(form => !isFormDeleted(form.id));
+        setForms(activeForms);
         
-        // Load IPNS statuses
+        // Load IPNS statuses (use activeForms, not savedForms)
         const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
-        for (const form of savedForms) {
+        for (const form of activeForms) {
           statuses[form.id] = await getIPNSStatus(form.id);
         }
         setIpnsStatuses(statuses);
@@ -84,7 +149,7 @@ export default function Home() {
       setIsLoading(false);
     };
     loadForms();
-  }, []);
+  }, [authenticated, user?.wallet?.address]);
 
   const handleDuplicateForm = async (formId: string, formTitle: string) => {
     setDuplicatingFormId(formId);
@@ -136,9 +201,14 @@ export default function Home() {
       await deleteIPNSKey(formToDelete);
       deleteIPNSMapping(formToDelete);
       
+      // Mark as deleted (for blockchain forms that will reload)
+      markFormAsDeleted(formToDelete);
+      
       setForms(prev => prev.filter(f => f.id !== formToDelete));
       
-      toast.success("Form deleted successfully");
+      toast.success("Form deleted successfully", {
+        description: "Note: Form data remains on blockchain but won't be shown",
+      });
       setDeleteDialogOpen(false);
       setFormToDelete(null);
       setDeletingFormId(null);
@@ -148,6 +218,72 @@ export default function Home() {
   const openDeleteDialog = (formId: string) => {
     setFormToDelete(formId);
     setDeleteDialogOpen(true);
+  };
+
+  const handleRestoreKeys = async () => {
+    if (!user?.wallet?.address) {
+      toast.error("Please connect your wallet first");
+      return;
+    }
+
+    if (wallets.length === 0) {
+      toast.error("No wallet found");
+      return;
+    }
+
+    try {
+      toast.info("Restoring IPNS keys...", {
+        description: "This may take a moment",
+      });
+
+      const { restoreAllIPNSKeys } = await import('@/lib/ipns-restore');
+      
+      const wallet = wallets[0];
+      const provider = await wallet.getEthereumProvider();
+      const walletAddress = user.wallet.address;
+
+      const signMessageFn = async (message: string) => {
+        const signature = await provider.request({
+          method: 'personal_sign',
+          params: [message, walletAddress],
+        }) as string;
+        return signature;
+      };
+
+      const results = await restoreAllIPNSKeys(
+        walletAddress,
+        signMessageFn,
+        (current, total, formId) => {
+          toast.info(`Restoring ${current}/${total}...`, {
+            description: `Form: ${formId.substring(0, 16)}...`,
+          });
+        }
+      );
+
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.filter(r => !r.success).length;
+
+      if (successCount > 0) {
+        toast.success(`✅ Restored ${successCount} form key(s)!`, {
+          description: failCount > 0 ? `${failCount} failed` : "You can now edit your forms",
+        });
+        setNeedsRestore(failCount);
+        
+        // Reload IPNS statuses
+        const statuses: Record<string, 'full' | 'partial' | 'none'> = {};
+        for (const form of forms) {
+          statuses[form.id] = await getIPNSStatus(form.id);
+        }
+        setIpnsStatuses(statuses);
+      } else {
+        toast.error("Failed to restore keys");
+      }
+    } catch (error) {
+      console.error('Failed to restore keys:', error);
+      toast.error("Failed to restore keys", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   };
 
   return (
@@ -168,6 +304,7 @@ export default function Home() {
               </div>
             </div>
             <nav className="flex items-center gap-2">
+              <ConnectButton />
               <ThemeToggle />
               <Link href="/settings">
                 <Button variant="ghost" size="sm">Settings</Button>
@@ -246,12 +383,32 @@ export default function Home() {
                 <h3 className="text-2xl font-bold mb-1">All Forms</h3>
                 <p className="text-sm text-muted-foreground">Manage and view your form collection</p>
               </div>
-              <Link href="/forms/create">
-                <Button size="lg" className="shadow-lg shadow-primary/20 w-full sm:w-auto">
-                  <PlusCircle className="mr-2 h-5 w-5" />
-                  Create New Form
+              {authenticated ? (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  {needsRestore > 0 && (
+                    <Button 
+                      size="lg" 
+                      variant="outline"
+                      onClick={() => handleRestoreKeys()}
+                      className="w-full sm:w-auto"
+                    >
+                      <Shield className="mr-2 h-5 w-5" />
+                      Restore Keys ({needsRestore})
+                    </Button>
+                  )}
+                  <Link href="/forms/create">
+                    <Button size="lg" className="shadow-lg shadow-primary/20 w-full sm:w-auto">
+                      <PlusCircle className="mr-2 h-5 w-5" />
+                      Create New Form
+                    </Button>
+                  </Link>
+                </div>
+              ) : (
+                <Button size="lg" onClick={login} className="shadow-lg shadow-primary/20 w-full sm:w-auto">
+                  <Shield className="mr-2 h-5 w-5" />
+                  Connect to Create Forms
                 </Button>
-              </Link>
+              )}
             </div>
 
             {forms.length === 0 ? (
@@ -262,14 +419,23 @@ export default function Home() {
                   </div>
                   <h3 className="text-2xl font-bold mb-2">No forms yet</h3>
                   <p className="text-muted-foreground text-center max-w-md mb-6">
-                    Get started by creating your first privacy-preserving form.
+                    {authenticated 
+                      ? "Get started by creating your first privacy-preserving form."
+                      : "Connect your wallet to start creating privacy-preserving forms."}
                   </p>
-                  <Link href="/forms/create">
-                    <Button size="lg">
-                      <PlusCircle className="mr-2 h-5 w-5" />
-                      Create Your First Form
+                  {authenticated ? (
+                    <Link href="/forms/create">
+                      <Button size="lg">
+                        <PlusCircle className="mr-2 h-5 w-5" />
+                        Create Your First Form
+                      </Button>
+                    </Link>
+                  ) : (
+                    <Button size="lg" onClick={login}>
+                      <Shield className="mr-2 h-5 w-5" />
+                      Connect to Get Started
                     </Button>
-                  </Link>
+                  )}
                 </CardContent>
               </Card>
             ) : (

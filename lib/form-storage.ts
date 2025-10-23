@@ -114,3 +114,40 @@ export function duplicateForm(formId: string): FormMetadata | null {
   saveFormMetadata(duplicate);
   return duplicate;
 }
+
+/**
+ * Get list of deleted form IDs
+ */
+export function getDeletedFormIds(): string[] {
+  try {
+    const data = localStorage.getItem("deleted-form-ids");
+    if (!data) return [];
+    return JSON.parse(data) as string[];
+  } catch (error) {
+    console.error("Failed to load deleted form IDs:", error);
+    return [];
+  }
+}
+
+/**
+ * Mark a form as deleted (for blockchain forms that can't be truly deleted)
+ */
+export function markFormAsDeleted(formId: string): void {
+  try {
+    const deletedIds = getDeletedFormIds();
+    if (!deletedIds.includes(formId)) {
+      deletedIds.push(formId);
+      localStorage.setItem("deleted-form-ids", JSON.stringify(deletedIds));
+    }
+  } catch (error) {
+    console.error("Failed to mark form as deleted:", error);
+  }
+}
+
+/**
+ * Check if a form is marked as deleted
+ */
+export function isFormDeleted(formId: string): boolean {
+  const deletedIds = getDeletedFormIds();
+  return deletedIds.includes(formId);
+}

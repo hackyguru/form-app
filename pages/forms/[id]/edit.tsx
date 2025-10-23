@@ -43,10 +43,12 @@ import { loadFormMetadata, saveFormMetadata } from "@/lib/form-storage";
 import { FormMetadata, FormField } from "@/types/form";
 import { uploadFormToIPFS, saveCIDMapping } from "@/lib/storacha";
 import { getIPNSNameObject, getIPNSName, updateIPNS, createIPNSName, publishToIPNS, saveIPNSKey, saveIPNSMapping } from "@/lib/ipns";
+import { usePrivy } from "@privy-io/react-auth";
 
 export default function EditForm() {
   const router = useRouter();
   const { id } = router.query;
+  const { ready, authenticated, login } = usePrivy();
 
   // State for loading
   const [loading, setLoading] = useState(true);
@@ -416,6 +418,110 @@ export default function EditForm() {
     { icon: CheckSquare, label: "Checkboxes", value: "checkbox" },
     { icon: Calendar, label: "Date", value: "date" },
   ];
+
+  // Show loading state while auth is initializing
+  if (!ready || loading) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20 flex items-center justify-center">
+        <Card className="w-full max-w-md mx-4">
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
+            <p className="text-lg font-semibold">Loading...</p>
+            <p className="text-sm text-muted-foreground">Please wait</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Show authentication required UI if not authenticated
+  if (!authenticated) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20">
+        {/* Header */}
+        <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
+          <div className="container mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex h-16 items-center justify-between">
+              <Link href="/" className="flex items-center gap-3 group">
+                <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                  <Shield className="h-4 w-4 text-primary" />
+                </div>
+                <div className="hidden sm:block">
+                  <h1 className="text-lg font-bold">Edit Form</h1>
+                  <p className="text-xs text-muted-foreground">Modify your form</p>
+                </div>
+              </Link>
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                <Button size="sm" onClick={login}>
+                  <Shield className="mr-2 h-4 w-4" />
+                  Connect Wallet
+                </Button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+          <div className="max-w-2xl mx-auto">
+            <Card className="border-2 border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-16 sm:py-20 text-center">
+                <div className="p-4 bg-primary/10 rounded-full mb-6">
+                  <Shield className="h-12 w-12 text-primary" />
+                </div>
+                <h2 className="text-2xl sm:text-3xl font-bold mb-3">Authentication Required</h2>
+                <p className="text-muted-foreground mb-6 max-w-md">
+                  Please connect your wallet or sign in to edit forms. Only authenticated users can modify forms.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button size="lg" onClick={login} className="gap-2">
+                    <Shield className="h-5 w-5" />
+                    Connect Wallet
+                  </Button>
+                  <Button size="lg" variant="outline" onClick={() => router.push("/")}>
+                    <ArrowLeft className="mr-2 h-5 w-5" />
+                    Back to Dashboard
+                  </Button>
+                </div>
+                <div className="mt-8 pt-8 border-t w-full max-w-md">
+                  <p className="text-sm text-muted-foreground mb-4 font-medium">Why do I need to sign in?</p>
+                  <div className="space-y-3 text-left">
+                    <div className="flex gap-3">
+                      <div className="p-1.5 bg-primary/10 rounded-full h-fit">
+                        <Shield className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Protect your forms</p>
+                        <p className="text-xs text-muted-foreground">Only you can edit your forms</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="p-1.5 bg-primary/10 rounded-full h-fit">
+                        <Shield className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">End-to-end encrypted</p>
+                        <p className="text-xs text-muted-foreground">Your data is encrypted and only you can access it</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="p-1.5 bg-primary/10 rounded-full h-fit">
+                        <Shield className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Decentralized storage</p>
+                        <p className="text-xs text-muted-foreground">Forms are stored on IPFS, not our servers</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20">

@@ -16,54 +16,67 @@ export const IPFS_GATEWAY = 'https://w3s.link/ipfs/';
  * Initialize a Storacha client with delegation from backend
  */
 export async function createStorachaClient(): Promise<Client.Client> {
-  // Create a new client
-  const client = await Client.create();
+  try {
+    // Create a new client
+    const client = await Client.create();
+    console.log('Created Storacha client with DID:', client.agent.did());
 
-  // Fetch delegation from backend
-  const response = await fetch('/api/storacha/delegation', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ did: client.agent.did() }),
-  });
-
-  // Get the response text once
-  const responseText = await response.text();
-
-  // Check if response is OK
-  if (!response.ok) {
-    console.error('Delegation API error:', {
-      status: response.status,
-      statusText: response.statusText,
-      body: responseText.substring(0, 500)
+    // Fetch delegation from backend
+    const response = await fetch('/api/storacha/delegation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ did: client.agent.did() }),
     });
-    throw new Error(`Failed to get delegation from backend: ${response.status} ${response.statusText}`);
+
+    // Get the response text once
+    const responseText = await response.text();
+
+    // Check if response is OK
+    if (!response.ok) {
+      console.error('Delegation API error:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: responseText.substring(0, 500)
+      });
+      throw new Error(`Failed to get delegation from backend: ${response.status} ${response.statusText}`);
+    }
+
+    // Check if response is JSON
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      console.error('API returned non-JSON response:', responseText.substring(0, 500));
+      throw new Error('API returned HTML instead of JSON. Check if the API route is working correctly.');
+    }
+
+    // Parse JSON from text
+    const { delegation: base64Delegation } = JSON.parse(responseText);
+
+    // Convert base64 back to Uint8Array
+    const delegationBytes = Uint8Array.from(atob(base64Delegation), c => c.charCodeAt(0));
+    console.log('Received delegation, size:', delegationBytes.length, 'bytes');
+
+    // Deserialize the delegation
+    const delegation = await Delegation.extract(delegationBytes);
+    
+    if (!delegation.ok) {
+      console.error('Failed to extract delegation:', delegation.error);
+      throw new Error('Failed to extract delegation');
+    }
+
+    console.log('Delegation extracted successfully');
+
+    // Add proof that this agent has been delegated capabilities on the space
+    const space = await client.addSpace(delegation.ok);
+    await client.setCurrentSpace(space.did());
+    
+    console.log('Space configured:', space.did());
+    console.log('✅ Storacha client ready for uploads');
+
+    return client;
+  } catch (error) {
+    console.error('❌ Failed to create Storacha client:', error);
+    throw error;
   }
-
-  // Check if response is JSON
-  const contentType = response.headers.get('content-type');
-  if (!contentType || !contentType.includes('application/json')) {
-    console.error('API returned non-JSON response:', responseText.substring(0, 500));
-    throw new Error('API returned HTML instead of JSON. Check if the API route is working correctly.');
-  }
-
-  // Parse JSON from text
-  const { delegation: base64Delegation } = JSON.parse(responseText);
-
-  // Convert base64 back to Uint8Array
-  const delegationBytes = Uint8Array.from(atob(base64Delegation), c => c.charCodeAt(0));
-
-  // Deserialize the delegation
-  const delegation = await Delegation.extract(delegationBytes);
-  
-  if (!delegation.ok) {
-    throw new Error('Failed to extract delegation');
-  }
-
-  // Add proof that this agent has been delegated capabilities on the space
-  const space = await client.addSpace(delegation.ok);
-  await client.setCurrentSpace(space.did());
-
-  return client;
 }
 
 /**
@@ -73,6 +86,7 @@ export async function createStorachaClient(): Promise<Client.Client> {
  */
 export async function uploadFormToIPFS(formMetadata: FormMetadata): Promise<string> {
   try {
+    console.log('🚀 Starting form upload to IPFS...');
     const client = await createStorachaClient();
 
     // Convert form metadata to JSON
@@ -81,20 +95,59 @@ export async function uploadFormToIPFS(formMetadata: FormMetadata): Promise<stri
 
     // Create a File object - use a simple name for the file
     const file = new File([blob], 'form-meta.json', { type: 'application/json' });
+    console.log('📦 Created file:', file.name, 'Size:', blob.size, 'bytes');
 
     // Upload to Storacha - use uploadDirectory for better compatibility
+    console.log('⬆️  Uploading to Storacha...');
     const directoryCid = await client.uploadDirectory([file]);
     
     // Return just the directory CID (without filename)
     // The retrieval function will handle appending /form-meta.json
     const cidString = directoryCid.toString();
 
-    console.log('Form uploaded to IPFS:', cidString);
-    console.log('Access at:', `${IPFS_GATEWAY}${cidString}/form-meta.json`);
+    console.log('✅ Form uploaded to IPFS:', cidString);
+    console.log('🔗 Access at:', `${IPFS_GATEWAY}${cidString}/form-meta.json`);
     return cidString;
   } catch (error) {
-    console.error('Failed to upload form to IPFS:', error);
+    console.error('❌ Failed to upload form to IPFS:', error);
+    if (error instanceof Error) {
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+    }
     throw new Error(`Failed to upload form to IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * Upload arbitrary JSON string to IPFS
+ * Returns the CID of the uploaded directory
+ * Useful for uploading encrypted keys or other JSON data
+ */
+export async function uploadJSONToIPFS(jsonString: string, filename: string = 'data.json'): Promise<string> {
+  try {
+    console.log('🚀 Starting JSON upload to IPFS:', filename);
+    const client = await createStorachaClient();
+
+    // Create blob and file
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const file = new File([blob], filename, { type: 'application/json' });
+    console.log('📦 Created file:', file.name, 'Size:', blob.size, 'bytes');
+
+    // Upload to Storacha
+    console.log('⬆️  Uploading to Storacha...');
+    const directoryCid = await client.uploadDirectory([file]);
+    const cidString = directoryCid.toString();
+
+    console.log('✅ JSON uploaded to IPFS:', cidString);
+    console.log('🔗 Access at:', `${IPFS_GATEWAY}${cidString}/${filename}`);
+    return cidString;
+  } catch (error) {
+    console.error('❌ Failed to upload JSON to IPFS:', error);
+    if (error instanceof Error) {
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+    }
+    throw new Error(`Failed to upload JSON to IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
