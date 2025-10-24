@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ConnectButton } from "@/components/auth/connect-button";
 import { ShareFormDialog } from "@/components/share-form-dialog";
@@ -25,6 +26,7 @@ import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { getUserFormsFromBlockchain, checkRestoreStatus } from "@/lib/ipns-restore";
 
 export default function Home() {
+  const router = useRouter();
   const { ready, authenticated, login, user } = usePrivy();
   const { wallets } = useWallets();
   const [isLoading, setIsLoading] = useState(true);
@@ -614,6 +616,13 @@ export default function Home() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              <DropdownMenuItem 
+                                onClick={() => router.push(`/forms/${form.id}/responses`)}
+                              >
+                                <BarChart className="mr-2 h-4 w-4" />
+                                View Responses
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem 
                                 onClick={() => handleDuplicateForm(form.id, form.title)}
                                 disabled={duplicatingFormId !== null}

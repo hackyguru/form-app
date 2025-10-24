@@ -19,6 +19,7 @@ export default function IPFSFormView() {
   const [submitted, setSubmitted] = useState(false);
   const [formData, setFormData] = useState<FormMetadata | null>(null);
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [formValues, setFormValues] = useState<Record<string, any>>({});
 
   useEffect(() => {
@@ -48,14 +49,53 @@ export default function IPFSFormView() {
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate form submission
-    console.log('Form submitted:', formValues);
-    console.log('Form CID:', cid);
-    setTimeout(() => {
+    
+    if (!formData) return;
+    
+    setSubmitting(true);
+    
+    try {
+      // Prepare response data
+      const responseData = {
+        formId: formData.id,
+        formTitle: formData.title,
+        submittedAt: new Date().toISOString(),
+        responses: formValues,
+      };
+
+      console.log('Submitting response:', responseData);
+
+      // Submit to API
+      const response = await fetch('/api/responses/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          formId: formData.id, // This is the IPNS name
+          responseData,
+          submitterAddress: null, // For now, anonymous
+          verified: false,
+          identityType: '',
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to submit response');
+      }
+
+      console.log('Response submitted successfully:', result);
       setSubmitted(true);
-    }, 500);
+    } catch (error) {
+      console.error('Error submitting response:', error);
+      alert('Failed to submit response. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (loading) {
@@ -447,9 +487,23 @@ export default function IPFSFormView() {
             </CardContent>
 
             <CardFooter className="flex flex-col gap-5 pt-6">
-              <Button type="submit" size="lg" className="w-full shadow-lg shadow-primary/30 h-12">
-                <Send className="mr-2 h-5 w-5" />
-                Submit Response
+              <Button 
+                type="submit" 
+                size="lg" 
+                className="w-full shadow-lg shadow-primary/30 h-12"
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    <Send className="mr-2 h-5 w-5" />
+                    Submit Response
+                  </>
+                )}
               </Button>
               
               <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">

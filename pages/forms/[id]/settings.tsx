@@ -359,6 +359,28 @@ export default function FormSettings() {
             </CardContent>
           </Card>
 
+          {/* View Responses */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="h-5 w-5" />
+                Form Responses
+              </CardTitle>
+              <CardDescription>
+                View and manage responses submitted to your form
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                onClick={() => router.push(`/forms/${resolvedIPNS}/responses`)}
+                className="w-full"
+              >
+                View Responses
+                <ExternalLink className="ml-2 h-4 w-4" />
+              </Button>
+            </CardContent>
+          </Card>
+
           {/* Custom Domain Manager */}
           <CustomDomainManager
             formId={resolvedIPNS}

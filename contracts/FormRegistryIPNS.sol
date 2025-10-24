@@ -24,19 +24,13 @@ contract FormRegistryIPNS {
         string customDomain;       // Optional custom domain (empty if none)
     }
     
-    struct IdentifiedSubmission {
-        string ipnsName;           // Changed from formId to ipnsName
-        string encryptedDataCID;
-        address submitter;
+    struct Response {
+        string ipnsName;           // Form's IPNS name
+        string responseCID;        // IPFS CID of response JSON data
+        address submitter;         // Address (0x0 for anonymous)
         uint256 timestamp;
-        bool verified;
-        string identityType;
-    }
-    
-    struct AnonymousSubmission {
-        string ipnsName;           // Changed from formId to ipnsName
-        string encryptedDataCID;
-        uint256 timestamp;
+        bool verified;             // If identity was verified (for identified mode)
+        string identityType;       // Type of identity verification (if applicable)
     }
     
     // Primary storage: IPNS → Form
@@ -55,13 +49,11 @@ contract FormRegistryIPNS {
     uint256 public domainPrice = 0.01 ether; // Base price for custom domain
     mapping(string => address) public domainOwners;
     
-    // Submission storage
-    IdentifiedSubmission[] public identifiedSubmissions;
-    AnonymousSubmission[] public anonymousSubmissions;
+    // Response storage - unified for both identified and anonymous
+    Response[] public responses;
     
-    // Form → Submission mappings (using IPNS)
-    mapping(string => uint256[]) public formIdentifiedSubmissions;
-    mapping(string => uint256[]) public formAnonymousSubmissions;
+    // Form → Response mappings (using IPNS)
+    mapping(string => uint256[]) public formResponses;
     
     // Events
     event FormCreated(
@@ -84,17 +76,11 @@ contract FormRegistryIPNS {
         string customDomain
     );
     
-    event IdentifiedSubmissionReceived(
+    event ResponseSubmitted(
         string indexed ipnsName,
-        uint256 submissionId,
+        uint256 responseId,
         address indexed submitter,
-        bool verified,
-        uint256 timestamp
-    );
-    
-    event AnonymousSubmissionReceived(
-        string indexed ipnsName,
-        uint256 submissionId,
+        string responseCID,
         uint256 timestamp
     );
     
@@ -227,59 +213,47 @@ contract FormRegistryIPNS {
     }
     
     /**
-     * @dev Submit response to an IDENTIFIED form
+     * @dev Submit a response to a form
+     * @param ipnsName The IPNS name of the form
+     * @param responseCID IPFS CID of the response JSON data
+     * @param submitter Address of submitter (0x0 for anonymous)
+     * @param verified Whether identity was verified
+     * @param identityType Type of identity verification (empty for anonymous)
      */
-    function submitIdentifiedResponse(
+    function submitResponse(
         string memory ipnsName,
-        string memory encryptedDataCID,
+        string memory responseCID,
         address submitter,
         bool verified,
         string memory identityType
     ) external onlyServer {
         require(forms[ipnsName].active, "Form not active");
-        require(forms[ipnsName].privacyMode == PrivacyMode.IDENTIFIED, "Form is anonymous mode");
+        require(bytes(responseCID).length > 0, "Invalid response CID");
         
-        identifiedSubmissions.push(IdentifiedSubmission({
+        // For anonymous forms, submitter should be 0x0
+        if (forms[ipnsName].privacyMode == PrivacyMode.ANONYMOUS) {
+            require(submitter == address(0), "Anonymous forms cannot have submitter address");
+        }
+        
+        responses.push(Response({
             ipnsName: ipnsName,
-            encryptedDataCID: encryptedDataCID,
+            responseCID: responseCID,
             submitter: submitter,
             timestamp: block.timestamp,
             verified: verified,
             identityType: identityType
         }));
         
-        uint256 submissionId = identifiedSubmissions.length - 1;
-        formIdentifiedSubmissions[ipnsName].push(submissionId);
+        uint256 responseId = responses.length - 1;
+        formResponses[ipnsName].push(responseId);
         
-        emit IdentifiedSubmissionReceived(
+        emit ResponseSubmitted(
             ipnsName,
-            submissionId,
+            responseId,
             submitter,
-            verified,
+            responseCID,
             block.timestamp
         );
-    }
-    
-    /**
-     * @dev Submit response to an ANONYMOUS form
-     */
-    function submitAnonymousResponse(
-        string memory ipnsName,
-        string memory encryptedDataCID
-    ) external onlyServer {
-        require(forms[ipnsName].active, "Form not active");
-        require(forms[ipnsName].privacyMode == PrivacyMode.ANONYMOUS, "Form requires identity");
-        
-        anonymousSubmissions.push(AnonymousSubmission({
-            ipnsName: ipnsName,
-            encryptedDataCID: encryptedDataCID,
-            timestamp: block.timestamp
-        }));
-        
-        uint256 submissionId = anonymousSubmissions.length - 1;
-        formAnonymousSubmissions[ipnsName].push(submissionId);
-        
-        emit AnonymousSubmissionReceived(ipnsName, submissionId, block.timestamp);
     }
     
     /**
@@ -356,18 +330,14 @@ contract FormRegistryIPNS {
     }
     
     /**
-     * @dev Get submission counts
+     * @dev Get response count for a form
      */
-    function getFormSubmissionCount(string memory ipnsName) 
+    function getFormResponseCount(string memory ipnsName) 
         external 
         view 
         returns (uint256) 
     {
-        if (forms[ipnsName].privacyMode == PrivacyMode.IDENTIFIED) {
-            return formIdentifiedSubmissions[ipnsName].length;
-        } else {
-            return formAnonymousSubmissions[ipnsName].length;
-        }
+        return formResponses[ipnsName].length;
     }
     
     /**
@@ -382,32 +352,48 @@ contract FormRegistryIPNS {
     }
     
     /**
-     * @dev Get identified submissions for a form
+     * @dev Get all response IDs for a form
      */
-    function getIdentifiedSubmissions(string memory ipnsName) 
+    function getFormResponses(string memory ipnsName) 
         external 
         view 
         returns (uint256[] memory) 
     {
-        require(
-            forms[ipnsName].privacyMode == PrivacyMode.IDENTIFIED,
-            "Form is anonymous mode"
-        );
-        return formIdentifiedSubmissions[ipnsName];
+        return formResponses[ipnsName];
     }
     
     /**
-     * @dev Get anonymous submissions for a form
+     * @dev Get a specific response by ID
      */
-    function getAnonymousSubmissions(string memory ipnsName) 
+    function getResponse(uint256 responseId) 
         external 
         view 
-        returns (uint256[] memory) 
+        returns (Response memory) 
+    {
+        require(responseId < responses.length, "Invalid response ID");
+        return responses[responseId];
+    }
+    
+    /**
+     * @dev Get all responses for a form (only for form creator)
+     */
+    function getFormResponseDetails(string memory ipnsName) 
+        external 
+        view 
+        returns (Response[] memory) 
     {
         require(
-            forms[ipnsName].privacyMode == PrivacyMode.ANONYMOUS,
-            "Form is identified mode"
+            forms[ipnsName].creator == msg.sender,
+            "Only form creator can view responses"
         );
-        return formAnonymousSubmissions[ipnsName];
+        
+        uint256[] memory responseIds = formResponses[ipnsName];
+        Response[] memory formResponseList = new Response[](responseIds.length);
+        
+        for (uint256 i = 0; i < responseIds.length; i++) {
+            formResponseList[i] = responses[responseIds[i]];
+        }
+        
+        return formResponseList;
     }
 }

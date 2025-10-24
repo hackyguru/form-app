@@ -1,12 +1,12 @@
 {
   "network": "statusTestnet",
   "contractName": "FormRegistryIPNS",
-  "contractAddress": "0x66764D39B593E677b6D18F1947253B21363EA737",
+  "contractAddress": "0x8bc8fCaE07bAc66DC80ea66336Ccece705DC2154",
   "serverWallet": "0x18331B7b011d822F963236d0b6b8775Fb86fc1AF",
   "deployer": "0x18331B7b011d822F963236d0b6b8775Fb86fc1AF",
-  "deployedAt": "2025-10-24T11:11:30.462Z",
+  "deployedAt": "2025-10-24T12:44:14.223Z",
   "chainId": "1660990954",
-  "blockNumber": 11703965,
+  "blockNumber": 11706747,
   "domainPrice": "0.01",
   "architecture": "IPNS-first with custom domains"
 }

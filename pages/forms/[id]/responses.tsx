@@ -39,13 +39,16 @@ import {
   Lock,
   Trash2,
   Check,
+  Loader2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
+import { getFormFromIPFS } from "@/lib/storacha";
+import { FormMetadata } from "@/types/form";
 
 export default function FormResponses() {
   const router = useRouter();
@@ -55,6 +58,114 @@ export default function FormResponses() {
   const [dateFilter, setDateFilter] = useState("all");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [responseToDelete, setResponseToDelete] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [responses, setResponses] = useState<any[]>([]);
+  const [responseData, setResponseData] = useState<Record<string, any>>({});
+  const [formFields, setFormFields] = useState<string[]>([]);
+  const [autoLoadLimit] = useState(5); // Auto-load first 5 responses
+  const [loadingData, setLoadingData] = useState<Record<string, boolean>>({});
+  const [formMetadata, setFormMetadata] = useState<FormMetadata | null>(null);
+  const [fieldLabels, setFieldLabels] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (id && typeof id === 'string') {
+      // Load both in parallel for faster initial load
+      Promise.all([
+        loadFormMetadata(id),
+        fetchResponses(id)
+      ]);
+    }
+  }, [id]);
+
+  const loadFormMetadata = async (formId: string) => {
+    try {
+      // Load form metadata from IPFS to get field labels
+      const metadata = await getFormFromIPFS(formId);
+      if (metadata) {
+        setFormMetadata(metadata);
+        
+        // Create mapping of field ID to field label
+        const labelMap: Record<string, string> = {};
+        metadata.fields.forEach(field => {
+          labelMap[field.id] = field.label;
+        });
+        setFieldLabels(labelMap);
+      }
+    } catch (error) {
+      console.error('Error loading form metadata:', error);
+      toast.error('Failed to load form metadata');
+    }
+  };
+
+  const fetchResponses = async (formId: string) => {
+    try {
+      setLoading(true);
+      const response = await fetch(`/api/responses/list?formId=${formId}`);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch responses');
+      }
+
+      // Transform to match existing structure
+      const transformed = data.responses.map((r: any) => ({
+        id: r.id.toString(),
+        submittedAt: new Date(r.timestamp).toLocaleString(),
+        responseCID: r.responseCID,
+        submitter: r.submitter,
+        data: {}, // Will load from IPFS on demand
+      }));
+
+      setResponses(transformed);
+
+      // Auto-load first few responses in parallel for preview and to get field names
+      const toAutoLoad = transformed.slice(0, autoLoadLimit);
+      await Promise.all(
+        toAutoLoad.map((resp: any) => loadResponseData(resp.responseCID, resp.id))
+      );
+    } catch (error: any) {
+      console.error('Error fetching responses:', error);
+      toast.error(error.message || 'Failed to load responses');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadResponseData = async (cid: string, responseId: string) => {
+    if (responseData[responseId]) return;
+    if (loadingData[responseId]) return; // Already loading
+
+    try {
+      setLoadingData(prev => ({ ...prev, [responseId]: true }));
+      
+      const gateway = 'https://w3s.link/ipfs/';
+      const response = await fetch(`${gateway}${cid}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch response data');
+      }
+
+      const data = await response.json();
+      const responseFields = data.responses || {};
+      
+      setResponseData(prev => ({ ...prev, [responseId]: responseFields }));
+      
+      // Update response with loaded data
+      setResponses(prev => prev.map(r => 
+        r.id === responseId ? { ...r, data: responseFields } : r
+      ));
+
+      // Extract field IDs from first loaded response (we'll map to labels later)
+      if (formFields.length === 0 && Object.keys(responseFields).length > 0) {
+        setFormFields(Object.keys(responseFields));
+      }
+    } catch (error) {
+      console.error('Error loading response data:', error);
+      toast.error('Failed to load response data from IPFS');
+    } finally {
+      setLoadingData(prev => ({ ...prev, [responseId]: false }));
+    }
+  };
 
   const handleDeleteResponse = () => {
     if (responseToDelete) {
@@ -69,40 +180,64 @@ export default function FormResponses() {
     setDeleteDialogOpen(true);
   };
 
-  const formData = {
-    title: "Customer Feedback Survey",
-    description: "Collect feedback from our customers",
+  const exportToCSV = async () => {
+    try {
+      // Load all responses first
+      const responsesToExport = [...responses];
+      toast.info('Preparing export...', { description: 'Loading all response data from IPFS' });
+      
+      for (const resp of responsesToExport) {
+        if (Object.keys(resp.data).length === 0) {
+          await loadResponseData(resp.responseCID, resp.id);
+        }
+      }
+
+      // Get all unique fields
+      const allFieldIds = new Set<string>();
+      responses.forEach(r => {
+        Object.keys(r.data).forEach(field => allFieldIds.add(field));
+      });
+
+      // Create CSV header with field labels
+      const fieldIdsArray = Array.from(allFieldIds);
+      const headers = ['#', 'Submitted At', 'Submitter', ...fieldIdsArray.map(fieldId => fieldLabels[fieldId] || fieldId)];
+      const csvRows = [headers.join(',')];
+
+      // Create CSV rows
+      responses.forEach((response, index) => {
+        const row = [
+          index + 1,
+          `"${response.submittedAt}"`,
+          `"${response.submitter === '0x0000000000000000000000000000000000000000' ? 'Anonymous' : response.submitter}"`,
+          ...fieldIdsArray.map(fieldId => {
+            const value = response.data[fieldId] || '';
+            return `"${String(value).replace(/"/g, '""')}"`;
+          })
+        ];
+        csvRows.push(row.join(','));
+      });
+
+      // Download CSV
+      const csv = csvRows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `responses-${id}-${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      toast.success('CSV exported successfully!');
+    } catch (error) {
+      console.error('Error exporting CSV:', error);
+      toast.error('Failed to export CSV');
+    }
   };
 
-  const responses = [
-    {
-      id: "1",
-      submittedAt: "2025-01-15 14:30",
-      data: {
-        "Full Name": "John Doe",
-        "Email Address": "john@example.com",
-        "Message": "Great service! Very satisfied with the product quality.",
-      },
-    },
-    {
-      id: "2",
-      submittedAt: "2025-01-14 09:15",
-      data: {
-        "Full Name": "Jane Smith",
-        "Email Address": "jane@example.com",
-        "Message": "Good experience overall. Delivery was fast.",
-      },
-    },
-    {
-      id: "3",
-      submittedAt: "2025-01-13 16:45",
-      data: {
-        "Full Name": "Bob Johnson",
-        "Email Address": "bob@example.com",
-        "Message": "Excellent customer support team. Highly recommended!",
-      },
-    },
-  ];
+  const formData = {
+    title: "Form Responses",
+    description: "View and manage form responses",
+  };
 
   const filteredResponses = useMemo(() => {
     let filtered = responses;
@@ -110,7 +245,7 @@ export default function FormResponses() {
     if (searchQuery) {
       filtered = filtered.filter(response =>
         Object.values(response.data).some(value =>
-          value.toLowerCase().includes(searchQuery.toLowerCase())
+          String(value).toLowerCase().includes(searchQuery.toLowerCase())
         )
       );
     }
@@ -153,9 +288,14 @@ export default function FormResponses() {
             </div>
             <div className="flex items-center gap-2">
               <ThemeToggle />
-              <Button variant="outline" size="sm">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={exportToCSV}
+                disabled={responses.length === 0}
+              >
                 <Download className="h-4 w-4 mr-2" />
-                Export
+                Export CSV
               </Button>
             </div>
           </div>
@@ -280,7 +420,12 @@ export default function FormResponses() {
             </div>
           </CardHeader>
           <CardContent>
-            {filteredResponses.length === 0 ? (
+            {loading ? (
+              <div className="text-center py-12">
+                <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
+                <p className="text-muted-foreground">Loading responses...</p>
+              </div>
+            ) : filteredResponses.length === 0 ? (
               <div className="text-center py-12">
                 <div className="flex justify-center mb-4">
                   <div className="p-4 bg-muted rounded-full">
@@ -310,28 +455,87 @@ export default function FormResponses() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-12">#</TableHead>
-                    <TableHead>Full Name</TableHead>
-                    <TableHead className="hidden md:table-cell">Email Address</TableHead>
+                    {/* Dynamic columns based on first 2 form fields - show labels */}
+                    {formFields.slice(0, 2).map((fieldId) => (
+                      <TableHead key={fieldId} className="hidden md:table-cell">
+                        {fieldLabels[fieldId] || fieldId}
+                      </TableHead>
+                    ))}
+                    {formFields.length === 0 && (
+                      <>
+                        <TableHead className="hidden md:table-cell">Field 1</TableHead>
+                        <TableHead className="hidden md:table-cell">Field 2</TableHead>
+                      </>
+                    )}
                     <TableHead className="hidden sm:table-cell">Submitted At</TableHead>
+                    <TableHead className="hidden sm:table-cell">Submitter</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredResponses.map((response, index) => (
-                    <TableRow key={response.id} className="hover:bg-muted/50">
-                      <TableCell className="font-medium">{index + 1}</TableCell>
-                      <TableCell className="font-medium">{response.data["Full Name"]}</TableCell>
-                      <TableCell className="hidden md:table-cell text-muted-foreground">
-                        {response.data["Email Address"]}
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">
-                        {response.submittedAt}
-                      </TableCell>
-                      <TableCell className="text-right">
+                  {filteredResponses.map((response, index) => {
+                    const hasData = Object.keys(response.data).length > 0;
+                    const isLoading = loadingData[response.id];
+                    
+                    return (
+                      <TableRow key={response.id} className="hover:bg-muted/50">
+                        <TableCell className="font-medium">{index + 1}</TableCell>
+                        {/* Dynamic data cells */}
+                        {formFields.slice(0, 2).map((field) => (
+                          <TableCell key={field} className="hidden md:table-cell">
+                            {isLoading ? (
+                              <span className="text-muted-foreground text-xs flex items-center gap-1">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                Loading...
+                              </span>
+                            ) : hasData ? (
+                              <span className="font-medium">
+                                {response.data[field] || '-'}
+                              </span>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                onClick={() => loadResponseData(response.responseCID, response.id)}
+                              >
+                                Load
+                              </Button>
+                            )}
+                          </TableCell>
+                        ))}
+                        {formFields.length === 0 && (
+                          <>
+                            <TableCell className="hidden md:table-cell text-muted-foreground">
+                              {isLoading ? 'Loading...' : hasData ? String(Object.values(response.data)[0] || '-') : 'Not loaded'}
+                            </TableCell>
+                            <TableCell className="hidden md:table-cell text-muted-foreground">
+                              {isLoading ? 'Loading...' : hasData ? String(Object.values(response.data)[1] || '-') : 'Not loaded'}
+                            </TableCell>
+                          </>
+                        )}
+                        <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">
+                          {response.submittedAt}
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell text-muted-foreground text-xs">
+                          {response.submitter === '0x0000000000000000000000000000000000000000' 
+                            ? <Badge variant="secondary">Anonymous</Badge>
+                            : <code className="text-xs">{response.submitter.slice(0, 6)}...{response.submitter.slice(-4)}</code>
+                          }
+                        </TableCell>
+                        <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           <Dialog>
                             <DialogTrigger asChild>
-                              <Button variant="ghost" size="sm">
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                onClick={() => {
+                                  if (response.responseCID && Object.keys(response.data).length === 0) {
+                                    loadResponseData(response.responseCID, response.id);
+                                  }
+                                }}
+                              >
                                 <Eye className="h-4 w-4" />
                               </Button>
                             </DialogTrigger>
@@ -343,14 +547,26 @@ export default function FormResponses() {
                                 </DialogDescription>
                               </DialogHeader>
                               <div className="space-y-4 mt-4">
-                                {Object.entries(response.data).map(([key, value]) => (
-                                  <div key={key} className="space-y-2">
-                                    <Label className="text-sm font-medium">{key}</Label>
-                                    <div className="p-3 bg-muted rounded-md">
-                                      <p className="text-sm">{value}</p>
-                                    </div>
+                                {Object.keys(response.data).length === 0 ? (
+                                  <div className="text-center py-8">
+                                    <p className="text-muted-foreground mb-4">Response data not loaded yet</p>
+                                    <Button 
+                                      onClick={() => loadResponseData(response.responseCID, response.id)}
+                                      size="sm"
+                                    >
+                                      Load from IPFS
+                                    </Button>
                                   </div>
-                                ))}
+                                ) : (
+                                  Object.entries(response.data).map(([fieldId, value]) => (
+                                    <div key={fieldId} className="space-y-2">
+                                      <Label className="text-sm font-medium">{fieldLabels[fieldId] || fieldId}</Label>
+                                      <div className="p-3 bg-muted rounded-md">
+                                        <p className="text-sm">{String(value)}</p>
+                                      </div>
+                                    </div>
+                                  ))
+                                )}
                               </div>
                             </DialogContent>
                           </Dialog>
@@ -365,7 +581,8 @@ export default function FormResponses() {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}

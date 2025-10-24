@@ -21,31 +21,6 @@
       },
       {
         "indexed": false,
-        "internalType": "uint256",
-        "name": "submissionId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "timestamp",
-        "type": "uint256"
-      }
-    ],
-    "name": "AnonymousSubmissionReceived",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "string",
-        "name": "ipnsName",
-        "type": "string"
-      },
-      {
-        "indexed": false,
         "internalType": "string",
         "name": "customDomain",
         "type": "string"
@@ -191,7 +166,7 @@
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "submissionId",
+        "name": "responseId",
         "type": "uint256"
       },
       {
@@ -202,9 +177,9 @@
       },
       {
         "indexed": false,
-        "internalType": "bool",
-        "name": "verified",
-        "type": "bool"
+        "internalType": "string",
+        "name": "responseCID",
+        "type": "string"
       },
       {
         "indexed": false,
@@ -213,37 +188,8 @@
         "type": "uint256"
       }
     ],
-    "name": "IdentifiedSubmissionReceived",
+    "name": "ResponseSubmitted",
     "type": "event"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "anonymousSubmissions",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "ipnsName",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "encryptedDataCID",
-        "type": "string"
-      },
-      {
-        "internalType": "uint256",
-        "name": "timestamp",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
   },
   {
     "inputs": [
@@ -333,31 +279,7 @@
         "type": "uint256"
       }
     ],
-    "name": "formAnonymousSubmissions",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      },
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "formIdentifiedSubmissions",
+    "name": "formResponses",
     "outputs": [
       {
         "internalType": "uint256",
@@ -407,25 +329,6 @@
         "internalType": "string",
         "name": "customDomain",
         "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "ipnsName",
-        "type": "string"
-      }
-    ],
-    "name": "getAnonymousSubmissions",
-    "outputs": [
-      {
-        "internalType": "uint256[]",
-        "name": "",
-        "type": "uint256[]"
       }
     ],
     "stateMutability": "view",
@@ -509,7 +412,7 @@
         "type": "string"
       }
     ],
-    "name": "getFormSubmissionCount",
+    "name": "getFormResponseCount",
     "outputs": [
       {
         "internalType": "uint256",
@@ -528,12 +431,114 @@
         "type": "string"
       }
     ],
-    "name": "getIdentifiedSubmissions",
+    "name": "getFormResponseDetails",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "string",
+            "name": "ipnsName",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "responseCID",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "submitter",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "verified",
+            "type": "bool"
+          },
+          {
+            "internalType": "string",
+            "name": "identityType",
+            "type": "string"
+          }
+        ],
+        "internalType": "struct FormRegistryIPNS.Response[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "ipnsName",
+        "type": "string"
+      }
+    ],
+    "name": "getFormResponses",
     "outputs": [
       {
         "internalType": "uint256[]",
         "name": "",
         "type": "uint256[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "responseId",
+        "type": "uint256"
+      }
+    ],
+    "name": "getResponse",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "string",
+            "name": "ipnsName",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "responseCID",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "submitter",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "verified",
+            "type": "bool"
+          },
+          {
+            "internalType": "string",
+            "name": "identityType",
+            "type": "string"
+          }
+        ],
+        "internalType": "struct FormRegistryIPNS.Response",
+        "name": "",
+        "type": "tuple"
       }
     ],
     "stateMutability": "view",
@@ -553,50 +558,6 @@
         "internalType": "bool",
         "name": "",
         "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "identifiedSubmissions",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "ipnsName",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "encryptedDataCID",
-        "type": "string"
-      },
-      {
-        "internalType": "address",
-        "name": "submitter",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "timestamp",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bool",
-        "name": "verified",
-        "type": "bool"
-      },
-      {
-        "internalType": "string",
-        "name": "identityType",
-        "type": "string"
       }
     ],
     "stateMutability": "view",
@@ -718,6 +679,50 @@
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "responses",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "ipnsName",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "responseCID",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "submitter",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "verified",
+        "type": "bool"
+      },
+      {
+        "internalType": "string",
+        "name": "identityType",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "serverWallet",
     "outputs": [
@@ -757,25 +762,7 @@
       },
       {
         "internalType": "string",
-        "name": "encryptedDataCID",
-        "type": "string"
-      }
-    ],
-    "name": "submitAnonymousResponse",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "ipnsName",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "encryptedDataCID",
+        "name": "responseCID",
         "type": "string"
       },
       {
@@ -794,7 +781,7 @@
         "type": "string"
       }
     ],
-    "name": "submitIdentifiedResponse",
+    "name": "submitResponse",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
