@@ -39,13 +39,15 @@ export default async function handler(
     const provider = new ethers.JsonRpcProvider(rpcUrl);
     const contract = new ethers.Contract(contractAddress, FormRegistryABI, provider);
 
-    // Fetch counts in parallel for all forms
+    // Fetch counts in parallel for all forms using optimized count function
     const countPromises = idsArray.map(async (formId) => {
       try {
-        const responseIds = await contract.getFormResponses(formId);
+        // Use getFormResponseCount() instead of getFormResponses().length
+        // This is much more gas-efficient and faster for large datasets
+        const count = await contract.getFormResponseCount(formId);
         return {
           formId,
-          count: responseIds.length
+          count: Number(count)
         };
       } catch (error) {
         console.error(`Error fetching count for form ${formId}:`, error);

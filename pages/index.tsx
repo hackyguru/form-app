@@ -515,7 +515,7 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-10 sm:mb-12">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 mb-6 sm:mb-8">
               <Card className="border-2 hover:border-primary/50 transition-all duration-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
                   <CardTitle className="text-sm font-medium text-muted-foreground">Total Forms</CardTitle>
@@ -532,23 +532,6 @@ export default function Home() {
                 </CardContent>
               </Card>
               <Card className="border-2 hover:border-primary/50 transition-all duration-200">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Total Responses</CardTitle>
-                  <div className="p-2 bg-green-500/10 rounded-lg">
-                    <BarChart className="h-4 w-4 text-green-600 dark:text-green-400" />
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-3xl font-bold tracking-tight">
-                    {totalResponses}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-                    <TrendingUp className="h-3 w-3" />
-                    Across all forms
-                  </p>
-                </CardContent>
-              </Card>
-              <Card className="border-2 hover:border-primary/50 transition-all duration-200 sm:col-span-2 lg:col-span-1">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
                   <CardTitle className="text-sm font-medium text-muted-foreground">Privacy Protected</CardTitle>
                   <div className="p-2 bg-purple-500/10 rounded-lg">
