@@ -35,6 +35,7 @@ export default function Home() {
   const [forms, setForms] = useState<FormMetadata[]>([]);
   const [ipnsStatuses, setIpnsStatuses] = useState<Record<string, 'full' | 'partial' | 'none'>>({});
   const [needsRestore, setNeedsRestore] = useState(0);
+  const [oldFormsCount, setOldFormsCount] = useState(0);
 
   // Check if form has valid IPNS (both name and key)
   const getIPNSStatus = async (formId: string): Promise<'full' | 'partial' | 'none'> => {
@@ -43,6 +44,28 @@ export default function Home() {
     
     const nameObj = await getIPNSNameObject(formId);
     return nameObj ? 'full' : 'partial';
+  };
+
+  // Clear old form-* entries from localStorage
+  const clearOldForms = () => {
+    console.log('🧹 Clearing old form data...');
+    const keysToRemove: string[] = [];
+    
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.includes('form-') && !key.includes('k51')) {
+        keysToRemove.push(key);
+      }
+    }
+    
+    console.log(`Removing ${keysToRemove.length} old entries`);
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+    
+    setOldFormsCount(0);
+    toast.success('Old forms cleared!', {
+      description: 'Your storage is now clean. Create new forms to use the IPNS-first architecture.',
+      duration: 3000,
+    });
   };
 
   useEffect(() => {

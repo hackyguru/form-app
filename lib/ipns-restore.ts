@@ -6,15 +6,15 @@
  */
 
 import { ethers } from 'ethers';
-import FormRegistryABI from './FormRegistry.abi.json';
+import FormRegistryIPNSABI from './FormRegistryIPNS.abi.json';
 import { IPFS_GATEWAY } from './storacha';
 import { decryptIPNSKeyFromStorage } from './crypto-utils';
 import { saveIPNSKey, saveIPNSMapping } from './ipns';
 import * as Name from 'w3name';
 
 interface RestoreResult {
-  formId: string;
-  ipnsName: string;
+  formId: string; // This is now the IPNS name (no separate formId)
+  ipnsName: string; // Same as formId
   success: boolean;
   error?: string;
 }
@@ -38,31 +38,32 @@ export async function getUserFormsFromBlockchain(
     console.log(`📝 Contract address: ${contractAddress}`);
     console.log(`👤 Querying forms for: ${walletAddress}`);
 
-    // Connect to blockchain (read-only)
+    // Connect to blockchain (read-only) with new IPNS-first contract
     const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const contract = new ethers.Contract(contractAddress, FormRegistryABI, provider);
+    const contract = new ethers.Contract(contractAddress, FormRegistryIPNSABI, provider);
 
-    // Call getCreatorForms directly - much simpler than parsing events!
-    const formIds = await contract.getCreatorForms(walletAddress);
-    console.log(`✅ Found ${formIds.length} form IDs from contract:`, formIds);
+    // Call getCreatorForms directly - now returns IPNS names!
+    const ipnsNames = await contract.getCreatorForms(walletAddress);
+    console.log(`✅ Found ${ipnsNames.length} form IPNS names from contract:`, ipnsNames);
 
-    // For each form ID, get the full form data
-    const allForms = await Promise.all(formIds.map(async (formId: string) => {
+    // For each IPNS name, get the full form data
+    const allForms = await Promise.all(ipnsNames.map(async (ipnsName: string) => {
       try {
-        const formData = await contract.forms(formId);
+        // In new contract, ipnsName is the key
+        const formData = await contract.forms(ipnsName);
         
         const form = {
-          formId: String(formId),
-          ipnsName: String(formData.ipnsName),
+          formId: String(ipnsName), // formId IS the IPNS name now!
+          ipnsName: String(ipnsName),
           encryptedKeyCID: String(formData.encryptedKeyCID),
           active: Boolean(formData.active),
         };
         
-        console.log(`📋 Form ${formId}:`, form);
+        console.log(`📋 Form ${ipnsName.substring(0, 20)}...:`, form);
         
         return form;
       } catch (error) {
-        console.error(`❌ Failed to load form ${formId}:`, error);
+        console.error(`❌ Failed to load form ${ipnsName}:`, error);
         return null;
       }
     }));
@@ -72,7 +73,7 @@ export async function getUserFormsFromBlockchain(
       .filter((f): f is NonNullable<typeof f> => f !== null)
       .filter(f => f.active && f.encryptedKeyCID);
     
-    console.log(`✅ Total: ${formIds.length} forms, ${activeForms.length} active with encrypted keys`);
+    console.log(`✅ Total: ${ipnsNames.length} forms, ${activeForms.length} active with encrypted keys`);
     console.log('✅ Active forms:', activeForms);
     return activeForms;
   } catch (error) {

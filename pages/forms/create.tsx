@@ -83,12 +83,20 @@ export default function CreateForm() {
     setIsSaving(true);
     
     try {
-      // Create form metadata JSON structure
-      const formId = `form-${Date.now()}`;
+      // Step 1: Create IPNS name FIRST (this is our primary ID now!)
+      toast.info("Creating permanent IPNS address...", {
+        description: "Your form will have an updateable link",
+      });
+
+      const { name, nameObj } = await createIPNSName();
+      console.log("✅ IPNS name created (this is our form ID):", name);
+      
+      // Use IPNS name as the form ID (no more duplicate IDs!)
+      const formId = name;
       const now = new Date().toISOString();
       
       const formMetadata: FormMetadata = {
-        id: formId,
+        id: formId, // Now using IPNS as the ID!
         title: formData.title,
         description: formData.description,
         status: formData.status,
@@ -98,7 +106,7 @@ export default function CreateForm() {
         version: "1.0.0",
       };
 
-      // Step 1: Upload to IPFS via Storacha
+      // Step 2: Upload to IPFS via Storacha
       toast.info("Uploading form to IPFS...", {
         description: "This may take a few moments",
       });
@@ -106,25 +114,17 @@ export default function CreateForm() {
       const cid = await uploadFormToIPFS(formMetadata);
       console.log("Form uploaded to IPFS. CID:", cid);
 
-      // Step 2: Create IPNS name (permanent address)
-      toast.info("Creating permanent IPNS address...", {
-        description: "Your form will have an updateable link",
-      });
-
-      const { name, nameObj } = await createIPNSName();
-      console.log("IPNS name created:", name);
-
       // Step 3: Publish CID to IPNS
       toast.info("Publishing to IPNS...", {
         description: "Linking your form to the permanent address",
       });
 
       await publishToIPNS(nameObj, cid);
-      console.log("Published CID to IPNS:", name, "→", cid);
+      console.log("Published CID to IPNS:", formId, "→", cid);
 
-      // Step 4: Save IPNS data for future updates
+      // Step 4: Save IPNS data for future updates (formId === IPNS name now)
       await saveIPNSKey(formId, nameObj);
-      saveIPNSMapping(formId, name);
+      saveIPNSMapping(formId, formId); // Both are the same now!
       
       // Also save CID mapping as backup
       saveCIDMapping(formId, cid);
@@ -203,21 +203,24 @@ export default function CreateForm() {
       }
 
       // Step 6: Register on blockchain (if authenticated)
+      // Note: formId is now the IPNS name - single ID system!
       if (user?.wallet?.address && encryptedKeyCID) {
         try {
           toast.info("Registering on blockchain...", {
             description: "Recording your form on Status Network",
           });
 
+          // formId and name are the same now (IPNS is primary ID)
           const blockchainResult = await registerFormOnChain(
-            formId,
-            name,
+            formId, // This is the IPNS name
+            formId, // ipnsName parameter (same value)
             encryptedKeyCID,
             user.wallet.address,
             privacyMode
           );
 
-          console.log("✅ Form registered on blockchain:", {
+          console.log("✅ Form registered on blockchain with IPNS as primary ID:", {
+            ipnsId: formId,
             txHash: blockchainResult.txHash,
             explorer: blockchainResult.explorerUrl,
           });

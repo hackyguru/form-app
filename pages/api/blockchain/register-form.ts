@@ -1,12 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ethers } from 'ethers';
-import FormRegistryABI from '../../../lib/FormRegistry.abi.json';
+import FormRegistryIPNSABI from '../../../lib/FormRegistryIPNS.abi.json';
 
 type PrivacyMode = 'identified' | 'anonymous';
 
 interface RegisterFormRequest {
-  formId: string;
-  ipnsName: string;
+  formId: string; // Now this is the IPNS name (same as ipnsName)
+  ipnsName: string; // Same as formId in new architecture
   encryptedKeyCID: string;
   creatorAddress: string;
   privacyMode: PrivacyMode;
@@ -80,29 +80,27 @@ export default async function handler(
     const provider = new ethers.JsonRpcProvider(rpcUrl);
     const serverWallet = new ethers.Wallet(serverPrivateKey, provider);
 
-    // Connect to contract
+    // Connect to new IPNS-first contract
     const contract = new ethers.Contract(
       contractAddress,
-      FormRegistryABI,
+      FormRegistryIPNSABI,
       serverWallet
     );
 
-    console.log('🔗 Registering form on blockchain:', {
-      formId,
+    console.log('🔗 Registering form on blockchain (IPNS-first):', {
+      ipnsName, // This is the primary ID now
       creator: creatorAddress,
       privacyMode,
-      ipnsName: ipnsName.substring(0, 20) + '...',
       encryptedKeyCID: encryptedKeyCID.substring(0, 20) + '...',
     });
 
     // Convert privacy mode to enum value (0 = IDENTIFIED, 1 = ANONYMOUS)
     const privacyModeEnum = privacyMode === 'identified' ? 0 : 1;
 
-    // Call contract function
+    // Call new contract function (no formId, just IPNS!)
     const tx = await contract.registerForm(
       creatorAddress,
-      formId,
-      ipnsName,
+      ipnsName, // IPNS is the primary ID
       encryptedKeyCID,
       privacyModeEnum
     );
