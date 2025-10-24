@@ -1,9 +1,9 @@
 {
   "network": "statusTestnet",
-  "contractAddress": "0xa7D0e3a1Ae88107f9D666d8DdAb6195233e32074",
+  "contractAddress": "0xCBE022A3207a4b37Fd81b65edE36df6480d748Ef",
   "serverWallet": "0x18331B7b011d822F963236d0b6b8775Fb86fc1AF",
   "deployer": "0x18331B7b011d822F963236d0b6b8775Fb86fc1AF",
-  "deployedAt": "2025-10-23T22:36:34.371Z",
+  "deployedAt": "2025-10-24T00:22:36.820Z",
   "chainId": "1660990954",
-  "blockNumber": 11681317
+  "blockNumber": 11684498
 }

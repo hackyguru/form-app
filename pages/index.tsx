@@ -93,17 +93,6 @@ export default function Home() {
               console.error(`Failed to load form ${bcForm.formId}:`, error);
             }
           }
-
-          // Check restore status
-          const restoreStatus = await checkRestoreStatus(user.wallet.address);
-          setNeedsRestore(restoreStatus.needsRestore);
-          
-          if (restoreStatus.needsRestore > 0) {
-            toast.info(`${restoreStatus.needsRestore} form(s) need key restoration`, {
-              description: 'Click "Restore Keys" to edit them on this device',
-              duration: 6000,
-            });
-          }
         }
 
         // Fallback: Try IPFS CID mappings from localStorage
@@ -128,6 +117,19 @@ export default function Home() {
           statuses[form.id] = await getIPNSStatus(form.id);
         }
         setIpnsStatuses(statuses);
+
+        // Check restore status AFTER loading and filtering forms
+        if (authenticated && user?.wallet?.address) {
+          const restoreStatus = await checkRestoreStatus(user.wallet.address);
+          setNeedsRestore(restoreStatus.needsRestore);
+          
+          if (restoreStatus.needsRestore > 0) {
+            toast.info(`${restoreStatus.needsRestore} form(s) need key restoration`, {
+              description: 'Click "Enable Editing" button on forms to edit them',
+              duration: 6000,
+            });
+          }
+        }
 
       } catch (error) {
         console.error('Error loading forms:', error);
@@ -188,36 +190,131 @@ export default function Home() {
 
   const handleDeleteForm = async () => {
     if (formToDelete) {
+      console.log(`🗑️ Deleting form: ${formToDelete}`);
       setDeletingFormId(formToDelete);
       await new Promise(resolve => setTimeout(resolve, 600));
       
-      // Delete from localStorage
-      deleteFormMetadata(formToDelete);
-      
-      // Delete CID mapping
-      deleteCIDMapping(formToDelete);
-      
-      // Delete IPNS data
-      await deleteIPNSKey(formToDelete);
-      deleteIPNSMapping(formToDelete);
-      
-      // Mark as deleted (for blockchain forms that will reload)
-      markFormAsDeleted(formToDelete);
-      
-      setForms(prev => prev.filter(f => f.id !== formToDelete));
-      
-      toast.success("Form deleted successfully", {
-        description: "Note: Form data remains on blockchain but won't be shown",
-      });
-      setDeleteDialogOpen(false);
-      setFormToDelete(null);
-      setDeletingFormId(null);
+      try {
+        // Mark as inactive on blockchain (user signs transaction)
+        if (user?.wallet?.address && wallets.length > 0) {
+          console.log(`🔗 Marking form as inactive on blockchain: ${formToDelete}`);
+          
+          const contractAddress = process.env.NEXT_PUBLIC_FORM_REGISTRY_ADDRESS;
+          
+          if (!contractAddress) {
+            throw new Error('Contract configuration missing');
+          }
+
+          // Get user's wallet and provider
+          const wallet = wallets[0];
+          const provider = await wallet.getEthereumProvider();
+          const ethersProvider = new (await import('ethers')).BrowserProvider(provider);
+          const signer = await ethersProvider.getSigner();
+          
+          const FormRegistryABI = (await import('@/lib/FormRegistry.abi.json')).default;
+          const contract = new (await import('ethers')).Contract(contractAddress, FormRegistryABI, signer);
+
+          console.log(`📤 Sending setFormStatus transaction...`);
+          const tx = await contract.setFormStatus(formToDelete, false);
+          console.log(`📤 Transaction sent:`, tx.hash);
+          
+          toast.info("Transaction submitted", {
+            description: "Waiting for confirmation...",
+          });
+
+          console.log(`⏳ Waiting for confirmation...`);
+          await tx.wait();
+          console.log(`✅ Form marked as inactive on blockchain`);
+        }
+
+        // Clean up local data
+        deleteFormMetadata(formToDelete);
+        deleteCIDMapping(formToDelete);
+        await deleteIPNSKey(formToDelete);
+        deleteIPNSMapping(formToDelete);
+        
+        setForms(prev => prev.filter(f => f.id !== formToDelete));
+        
+        toast.success("Form deleted successfully", {
+          description: "Deletion recorded on blockchain - won't appear on any device",
+        });
+      } catch (error) {
+        console.error('Failed to delete form:', error);
+        toast.error("Failed to delete form", {
+          description: error instanceof Error ? error.message : "Unknown error",
+        });
+      } finally {
+        setDeleteDialogOpen(false);
+        setFormToDelete(null);
+        setDeletingFormId(null);
+      }
     }
   };
 
   const openDeleteDialog = (formId: string) => {
     setFormToDelete(formId);
     setDeleteDialogOpen(true);
+  };
+
+  const handleRestoreSingleKey = async (formId: string, formTitle: string) => {
+    if (!user?.wallet?.address) {
+      toast.error("Please connect your wallet first");
+      return;
+    }
+
+    if (wallets.length === 0) {
+      toast.error("No wallet found");
+      return;
+    }
+
+    try {
+      toast.info("Enabling editing...", {
+        description: formTitle,
+      });
+
+      const { restoreSingleIPNSKey } = await import('@/lib/ipns-restore');
+      
+      const wallet = wallets[0];
+      const provider = await wallet.getEthereumProvider();
+      const walletAddress = user.wallet.address;
+
+      const signMessageFn = async (message: string) => {
+        const signature = await provider.request({
+          method: 'personal_sign',
+          params: [message, walletAddress],
+        }) as string;
+        return signature;
+      };
+
+      const result = await restoreSingleIPNSKey(
+        formId,
+        walletAddress,
+        signMessageFn
+      );
+
+      if (result.success) {
+        toast.success("✅ Editing enabled!", {
+          description: "You can now edit this form",
+        });
+        
+        // Update IPNS status for this form
+        const status = await getIPNSStatus(formId);
+        setIpnsStatuses(prev => ({ ...prev, [formId]: status }));
+        
+        // Update needsRestore count
+        const restoreStatus = await checkRestoreStatus(user.wallet.address);
+        setNeedsRestore(restoreStatus.needsRestore);
+      } else {
+        toast.error("Failed to enable editing", {
+          description: result.error || "Unknown error",
+        });
+      }
+    } catch (error) {
+      console.error('Failed to restore key:', error);
+      toast.error("Failed to enable editing", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   };
 
   const handleRestoreKeys = async () => {
@@ -384,25 +481,12 @@ export default function Home() {
                 <p className="text-sm text-muted-foreground">Manage and view your form collection</p>
               </div>
               {authenticated ? (
-                <div className="flex flex-col sm:flex-row gap-2">
-                  {needsRestore > 0 && (
-                    <Button 
-                      size="lg" 
-                      variant="outline"
-                      onClick={() => handleRestoreKeys()}
-                      className="w-full sm:w-auto"
-                    >
-                      <Shield className="mr-2 h-5 w-5" />
-                      Restore Keys ({needsRestore})
-                    </Button>
-                  )}
-                  <Link href="/forms/create">
-                    <Button size="lg" className="shadow-lg shadow-primary/20 w-full sm:w-auto">
-                      <PlusCircle className="mr-2 h-5 w-5" />
-                      Create New Form
-                    </Button>
-                  </Link>
-                </div>
+                <Link href="/forms/create">
+                  <Button size="lg" className="shadow-lg shadow-primary/20 w-full sm:w-auto">
+                    <PlusCircle className="mr-2 h-5 w-5" />
+                    Create New Form
+                  </Button>
+                </Link>
               ) : (
                 <Button size="lg" onClick={login} className="shadow-lg shadow-primary/20 w-full sm:w-auto">
                   <Shield className="mr-2 h-5 w-5" />
@@ -472,20 +556,10 @@ export default function Home() {
                             <Badge 
                               variant="outline" 
                               className="bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20"
-                              title="Updateable permanent link (IPNS)"
+                              title="Updateable permanent link - Can be edited from any device"
                             >
                               <LinkIcon className="h-3 w-3 mr-1" />
                               IPNS
-                            </Badge>
-                          )}
-                          {ipnsStatuses[form.id] === 'partial' && (
-                            <Badge 
-                              variant="outline" 
-                              className="bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20"
-                              title="IPNS link exists but signing key missing (will be recreated on edit)"
-                            >
-                              <AlertTriangle className="h-3 w-3 mr-1" />
-                              IPNS⚠
                             </Badge>
                           )}
                           <DropdownMenu>
@@ -532,6 +606,20 @@ export default function Home() {
                         <span className="text-muted-foreground text-xs">{form.createdAt}</span>
                       </div>
                       <div className="flex flex-col gap-2">
+                        {ipnsStatuses[form.id] === 'partial' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full border-orange-500/50 hover:bg-orange-500/10 hover:border-orange-500"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              handleRestoreSingleKey(form.id, form.title);
+                            }}
+                          >
+                            <Shield className="h-3.5 w-3.5 mr-2" />
+                            Enable Editing on This Device
+                          </Button>
+                        )}
                         <div className="flex gap-2">
                           <Link href={`/forms/${form.id}/edit`} className="flex-1">
                             <Button variant="outline" className="w-full group/btn" size="sm">

@@ -75,6 +75,8 @@ contract FormRegistry {
     
     event FormStatusChanged(string indexed formId, bool active);
     
+    event EncryptedKeyUpdated(string indexed formId, string newEncryptedKeyCID);
+    
     modifier onlyServer() {
         require(msg.sender == serverWallet, "Only server wallet");
         _;
@@ -258,6 +260,7 @@ contract FormRegistry {
     
     /**
      * @dev Toggle form active status (only creator)
+     * Use false to "delete" (archive) a form
      */
     function setFormStatus(string memory formId, bool active) 
         external 
@@ -265,6 +268,19 @@ contract FormRegistry {
     {
         forms[formId].active = active;
         emit FormStatusChanged(formId, active);
+    }
+    
+    /**
+     * @dev Update encrypted IPNS key CID (only creator)
+     * Useful for key rotation or recovery
+     */
+    function updateEncryptedKey(string memory formId, string memory newEncryptedKeyCID) 
+        external 
+        onlyFormCreator(formId) 
+    {
+        require(bytes(newEncryptedKeyCID).length > 0, "Invalid CID");
+        forms[formId].encryptedKeyCID = newEncryptedKeyCID;
+        emit EncryptedKeyUpdated(formId, newEncryptedKeyCID);
     }
     
     /**

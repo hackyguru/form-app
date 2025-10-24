@@ -135,9 +135,13 @@ export function getDeletedFormIds(): string[] {
 export function markFormAsDeleted(formId: string): void {
   try {
     const deletedIds = getDeletedFormIds();
+    console.log(`🗑️ Current deleted IDs before adding:`, deletedIds);
     if (!deletedIds.includes(formId)) {
       deletedIds.push(formId);
       localStorage.setItem("deleted-form-ids", JSON.stringify(deletedIds));
+      console.log(`🗑️ Added ${formId} to deleted list. New list:`, deletedIds);
+    } else {
+      console.log(`🗑️ ${formId} already in deleted list`);
     }
   } catch (error) {
     console.error("Failed to mark form as deleted:", error);
@@ -149,5 +153,10 @@ export function markFormAsDeleted(formId: string): void {
  */
 export function isFormDeleted(formId: string): boolean {
   const deletedIds = getDeletedFormIds();
-  return deletedIds.includes(formId);
+  const isDeleted = deletedIds.includes(formId);
+  if (deletedIds.length > 0) {
+    console.log(`🗑️ Deleted forms list:`, deletedIds);
+    console.log(`🔍 Checking if ${formId} is deleted: ${isDeleted}`);
+  }
+  return isDeleted;
 }

@@ -50,18 +50,44 @@ export async function getUserFormsFromBlockchain(
     const events = await contract.queryFilter(filter, deploymentBlock, 'latest');
     console.log(`Found ${events.length} FormCreated events`);
 
-    // Extract form details from events
-    const forms = events.map((event: any) => {
+    // Extract form details from events and check if still active
+    const allForms = await Promise.all(events.map(async (event: any) => {
       const args = event.args;
-      return {
-        formId: String(args.formId), // Ensure formId is a string
-        ipnsName: String(args.ipnsName),
-        encryptedKeyCID: args.encryptedKeyCID ? String(args.encryptedKeyCID) : '',
-      };
-    });
+      // Use toArray() or direct indexing to get actual values from ethers.js Result
+      const formId = args[1] || args.formId; // Index 1 is formId in event
+      const ipnsName = args[2] || args.ipnsName; // Index 2 is ipnsName
+      const encryptedKeyCID = args[3] || args.encryptedKeyCID; // Index 3 is encryptedKeyCID
+      
+      console.log('🔍 Raw event args:', { formId, ipnsName, encryptedKeyCID });
+      
+      // Check if form is still active on blockchain
+      try {
+        const formData = await contract.forms(String(formId));
+        const isActive = formData.active;
+        
+        return {
+          formId: formId ? String(formId) : '',
+          ipnsName: ipnsName ? String(ipnsName) : '',
+          encryptedKeyCID: encryptedKeyCID ? String(encryptedKeyCID) : '',
+          active: isActive,
+        };
+      } catch (error) {
+        console.error(`Failed to check status for form ${formId}:`, error);
+        return {
+          formId: formId ? String(formId) : '',
+          ipnsName: ipnsName ? String(ipnsName) : '',
+          encryptedKeyCID: encryptedKeyCID ? String(encryptedKeyCID) : '',
+          active: true, // Assume active if can't check
+        };
+      }
+    }));
 
-    console.log(`✅ Found ${forms.length} forms with encrypted keys`);
-    return forms.filter(f => f.encryptedKeyCID); // Only forms with encrypted keys
+    // Filter: only active forms with encrypted keys
+    const activeForms = allForms.filter(f => f.active && f.encryptedKeyCID);
+    
+    console.log(`✅ Found ${allForms.length} total forms, ${activeForms.length} active with encrypted keys`);
+    console.log('✅ Active form objects:', activeForms);
+    return activeForms;
   } catch (error) {
     console.error('Failed to fetch user forms from blockchain:', error);
     return [];
@@ -201,8 +227,12 @@ export async function checkRestoreStatus(walletAddress: string): Promise<{
   needsRestore: number;
 }> {
   try {
+    // getUserFormsFromBlockchain now filters by active status on-chain
     const forms = await getUserFormsFromBlockchain(walletAddress);
+    console.log(`📊 Restore Status: Found ${forms.length} active forms on blockchain`);
+    
     const keysAvailable = forms.filter(f => hasIPNSKey(f.formId)).length;
+    console.log(`📊 Restore Status: ${keysAvailable} forms have keys, ${forms.length - keysAvailable} need restoration`);
 
     return {
       totalForms: forms.length,
