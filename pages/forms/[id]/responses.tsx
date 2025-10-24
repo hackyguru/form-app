@@ -66,16 +66,26 @@ export default function FormResponses() {
   const [loadingData, setLoadingData] = useState<Record<string, boolean>>({});
   const [formMetadata, setFormMetadata] = useState<FormMetadata | null>(null);
   const [fieldLabels, setFieldLabels] = useState<Record<string, string>>({});
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(50);
+  const [totalResponses, setTotalResponses] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
 
   useEffect(() => {
     if (id && typeof id === 'string') {
-      // Load both in parallel for faster initial load
-      Promise.all([
-        loadFormMetadata(id),
-        fetchResponses(id)
-      ]);
+      // Load form metadata once
+      loadFormMetadata(id);
     }
   }, [id]);
+
+  useEffect(() => {
+    if (id && typeof id === 'string') {
+      // Fetch responses whenever page changes
+      fetchResponses(id, currentPage);
+    }
+  }, [id, currentPage]);
 
   const loadFormMetadata = async (formId: string) => {
     try {
@@ -97,14 +107,24 @@ export default function FormResponses() {
     }
   };
 
-  const fetchResponses = async (formId: string) => {
+  const fetchResponses = async (formId: string, page: number = 1) => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/responses/list?formId=${formId}`);
+      
+      // Fetch paginated responses
+      const response = await fetch(
+        `/api/responses/list?formId=${formId}&page=${page}&limit=${pageSize}`
+      );
       const data = await response.json();
       
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch responses');
+      }
+
+      // Update pagination state
+      if (data.pagination) {
+        setTotalResponses(data.pagination.total);
+        setTotalPages(data.pagination.totalPages);
       }
 
       // Transform to match existing structure
@@ -119,10 +139,12 @@ export default function FormResponses() {
       setResponses(transformed);
 
       // Auto-load first few responses in parallel for preview and to get field names
-      const toAutoLoad = transformed.slice(0, autoLoadLimit);
+      const toAutoLoad = transformed.slice(0, Math.min(autoLoadLimit, transformed.length));
       await Promise.all(
         toAutoLoad.map((resp: any) => loadResponseData(resp.responseCID, resp.id))
       );
+      
+      console.log(`✅ Loaded page ${page} with ${transformed.length} responses (${data.pagination?.total} total)`);
     } catch (error: any) {
       console.error('Error fetching responses:', error);
       toast.error(error.message || 'Failed to load responses');
@@ -182,19 +204,83 @@ export default function FormResponses() {
 
   const exportToCSV = async () => {
     try {
-      // Load all responses first
-      const responsesToExport = [...responses];
-      toast.info('Preparing export...', { description: 'Loading all response data from IPFS' });
-      
-      for (const resp of responsesToExport) {
-        if (Object.keys(resp.data).length === 0) {
-          await loadResponseData(resp.responseCID, resp.id);
+      if (!id || typeof id !== 'string') return;
+
+      toast.loading('Starting export...', { id: 'export' });
+
+      // First, fetch ALL responses (not just current page)
+      const allResponsesData = [];
+      let currentExportPage = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await fetch(
+          `/api/responses/list?formId=${id}&page=${currentExportPage}&limit=100`
+        );
+        const data = await response.json();
+
+        if (data.responses && data.responses.length > 0) {
+          allResponsesData.push(...data.responses);
+          currentExportPage++;
+          hasMore = data.pagination?.hasNextPage || false;
+          
+          toast.loading(`Loading responses: ${allResponsesData.length}/${data.pagination?.total || allResponsesData.length}`, { id: 'export' });
+        } else {
+          hasMore = false;
         }
+      }
+
+      if (allResponsesData.length === 0) {
+        toast.error('No responses to export', { id: 'export' });
+        return;
+      }
+
+      toast.loading(`Loading response data from IPFS...`, { id: 'export' });
+
+      // Load all response data in parallel batches
+      const batchSize = 20;
+      const batches = Math.ceil(allResponsesData.length / batchSize);
+      const allResponses: any[] = [];
+
+      for (let i = 0; i < batches; i++) {
+        const start = i * batchSize;
+        const end = start + batchSize;
+        const batch = allResponsesData.slice(start, end);
+
+        // Load batch in parallel
+        const batchPromises = batch.map(async (r: any) => {
+          const responseObj = {
+            id: r.id.toString(),
+            submittedAt: new Date(r.timestamp).toLocaleString(),
+            responseCID: r.responseCID,
+            submitter: r.submitter,
+            data: {} as any,
+          };
+
+          try {
+            const gateway = 'https://w3s.link/ipfs/';
+            const response = await fetch(`${gateway}${r.responseCID}`);
+            if (response.ok) {
+              const data = await response.json();
+              responseObj.data = data.responses || {};
+            }
+          } catch (error) {
+            console.error(`Failed to load response ${r.responseCID}:`, error);
+          }
+
+          return responseObj;
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        allResponses.push(...batchResults);
+
+        const progress = Math.round(((i + 1) / batches) * 100);
+        toast.loading(`Processing: ${progress}% (${allResponses.length}/${allResponsesData.length})`, { id: 'export' });
       }
 
       // Get all unique fields
       const allFieldIds = new Set<string>();
-      responses.forEach(r => {
+      allResponses.forEach(r => {
         Object.keys(r.data).forEach(field => allFieldIds.add(field));
       });
 
@@ -204,7 +290,7 @@ export default function FormResponses() {
       const csvRows = [headers.join(',')];
 
       // Create CSV rows
-      responses.forEach((response, index) => {
+      allResponses.forEach((response, index) => {
         const row = [
           index + 1,
           `"${response.submittedAt}"`,
@@ -226,11 +312,11 @@ export default function FormResponses() {
       a.download = `responses-${id}-${Date.now()}.csv`;
       a.click();
       URL.revokeObjectURL(url);
-      
-      toast.success('CSV exported successfully!');
+
+      toast.success(`Exported ${allResponses.length} responses!`, { id: 'export' });
     } catch (error) {
       console.error('Error exporting CSV:', error);
-      toast.error('Failed to export CSV');
+      toast.error('Failed to export CSV', { id: 'export' });
     }
   };
 
@@ -476,10 +562,11 @@ export default function FormResponses() {
                   {filteredResponses.map((response, index) => {
                     const hasData = Object.keys(response.data).length > 0;
                     const isLoading = loadingData[response.id];
+                    const globalIndex = (currentPage - 1) * pageSize + index + 1;
                     
                     return (
                       <TableRow key={response.id} className="hover:bg-muted/50">
-                        <TableCell className="font-medium">{index + 1}</TableCell>
+                        <TableCell className="font-medium">{globalIndex}</TableCell>
                         {/* Dynamic data cells */}
                         {formFields.slice(0, 2).map((field) => (
                           <TableCell key={field} className="hidden md:table-cell">
@@ -585,6 +672,62 @@ export default function FormResponses() {
                   })}
                 </TableBody>
               </Table>
+            )}
+            
+            {/* Pagination Controls */}
+            {!loading && totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-4 border-t">
+                <div className="text-sm text-muted-foreground">
+                  Showing <span className="font-medium">{((currentPage - 1) * pageSize) + 1}</span> to{' '}
+                  <span className="font-medium">{Math.min(currentPage * pageSize, totalResponses)}</span> of{' '}
+                  <span className="font-medium">{totalResponses}</span> responses
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Previous
+                  </Button>
+                  <div className="flex items-center gap-1">
+                    {/* Show page numbers */}
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <Button
+                          key={pageNum}
+                          variant={currentPage === pageNum ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setCurrentPage(pageNum)}
+                          className="w-10"
+                        >
+                          {pageNum}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

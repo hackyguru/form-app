@@ -28,10 +28,21 @@ export default async function handler(
   }
 
   try {
-    const { formId } = req.query;
+    const { formId, page, limit } = req.query;
 
     if (!formId || typeof formId !== 'string') {
       return res.status(400).json({ error: 'Form ID is required' });
+    }
+
+    // Parse pagination parameters with defaults
+    const pageNum = page ? parseInt(page as string, 10) : 1;
+    const limitNum = limit ? parseInt(limit as string, 10) : 50;
+    
+    // Validate pagination parameters
+    if (pageNum < 1 || limitNum < 1 || limitNum > 100) {
+      return res.status(400).json({ 
+        error: 'Invalid pagination parameters. Page must be >= 1, limit must be 1-100' 
+      });
     }
 
     const rpcUrl = process.env.STATUS_NETWORK_RPC;
@@ -49,16 +60,24 @@ export default async function handler(
     );
 
     // Get all response IDs for this form
-    const responseIds = await contract.getFormResponses(formId);
-    console.log(`Found ${responseIds.length} responses for form ${formId}`);
+    const allResponseIds = await contract.getFormResponses(formId);
+    const totalCount = allResponseIds.length;
+    
+    console.log(`Found ${totalCount} total responses for form ${formId}`);
 
-    // Fetch each response
-    const responses: ResponseItem[] = [];
-    for (let i = 0; i < responseIds.length; i++) {
-      const responseId = responseIds[i];
+    // Calculate pagination
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = Math.min(startIndex + limitNum, totalCount);
+    
+    // Get only the IDs for this page
+    const pageResponseIds = allResponseIds.slice(startIndex, endIndex);
+    
+    console.log(`Fetching responses ${startIndex + 1} to ${endIndex} (page ${pageNum}, limit ${limitNum})`);
+
+    // Fetch responses for this page in parallel
+    const responsePromises = pageResponseIds.map(async (responseId: bigint) => {
       const response = await contract.getResponse(responseId);
-      
-      responses.push({
+      return {
         id: Number(responseId),
         ipnsName: response.ipnsName,
         responseCID: response.responseCID,
@@ -66,14 +85,29 @@ export default async function handler(
         timestamp: new Date(Number(response.timestamp) * 1000).toISOString(),
         verified: response.verified,
         identityType: response.identityType,
-      });
-    }
+      };
+    });
+
+    const responses = await Promise.all(responsePromises);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(totalCount / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPrevPage = pageNum > 1;
 
     return res.status(200).json({
       success: true,
       responses,
       count: responses.length,
-    });
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalCount,
+        totalPages,
+        hasNextPage,
+        hasPrevPage,
+      }
+    } as any);
   } catch (error: any) {
     console.error('Error fetching responses:', error);
     return res.status(500).json({

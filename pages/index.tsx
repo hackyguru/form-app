@@ -38,6 +38,8 @@ export default function Home() {
   const [ipnsStatuses, setIpnsStatuses] = useState<Record<string, 'full' | 'partial' | 'none'>>({});
   const [needsRestore, setNeedsRestore] = useState(0);
   const [oldFormsCount, setOldFormsCount] = useState(0);
+  const [totalResponses, setTotalResponses] = useState(0);
+  const [formResponseCounts, setFormResponseCounts] = useState<Record<string, number>>({});
 
   // Check if form has valid IPNS (both name and key)
   const getIPNSStatus = async (formId: string): Promise<'full' | 'partial' | 'none'> => {
@@ -46,6 +48,46 @@ export default function Home() {
     
     const nameObj = await getIPNSNameObject(formId);
     return nameObj ? 'full' : 'partial';
+  };
+
+  // Fetch response counts for all forms using optimized count endpoint
+  const fetchResponseCounts = async (forms: FormMetadata[]) => {
+    try {
+      if (forms.length === 0) {
+        setFormResponseCounts({});
+        setTotalResponses(0);
+        return;
+      }
+
+      // Use the new count endpoint - much faster!
+      const formIds = forms.map(f => f.id).join(',');
+      const response = await fetch(`/api/responses/count?formIds=${formIds}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setFormResponseCounts(data.counts);
+        setTotalResponses(data.total);
+        console.log(`✅ Loaded counts for ${forms.length} forms: ${data.total} total responses`);
+      } else {
+        console.error('Failed to fetch response counts');
+        // Fallback to zeros
+        const counts: Record<string, number> = {};
+        forms.forEach(form => {
+          counts[form.id] = 0;
+        });
+        setFormResponseCounts(counts);
+        setTotalResponses(0);
+      }
+    } catch (error) {
+      console.error('Error fetching response counts:', error);
+      // Fallback to zeros
+      const counts: Record<string, number> = {};
+      forms.forEach(form => {
+        counts[form.id] = 0;
+      });
+      setFormResponseCounts(counts);
+      setTotalResponses(0);
+    }
   };
 
   // Clear old form-* entries from localStorage
@@ -165,6 +207,9 @@ export default function Home() {
         }
         setIpnsStatuses(statuses);
 
+        // Fetch response counts for all forms
+        await fetchResponseCounts(loadedForms);
+
         // Check restore status AFTER loading and filtering forms
         if (authenticated && user?.wallet?.address) {
           const restoreStatus = await checkRestoreStatus(user.wallet.address);
@@ -187,6 +232,9 @@ export default function Home() {
           statuses[form.id] = await getIPNSStatus(form.id);
         }
         setIpnsStatuses(statuses);
+
+        // Fetch response counts for all forms
+        await fetchResponseCounts(activeForms);
       }
       
       await new Promise(resolve => setTimeout(resolve, 1500));
@@ -492,7 +540,7 @@ export default function Home() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold tracking-tight">
-                    {forms.length * 25}
+                    {totalResponses}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
                     <TrendingUp className="h-3 w-3" />
@@ -650,7 +698,9 @@ export default function Home() {
                           <div className="p-1.5 bg-primary/10 rounded">
                             <BarChart className="h-3.5 w-3.5 text-primary" />
                           </div>
-                          <span className="font-medium">0 responses</span>
+                          <span className="font-medium">
+                            {formResponseCounts[form.id] ?? 0} {formResponseCounts[form.id] === 1 ? 'response' : 'responses'}
+                          </span>
                         </div>
                         <span className="text-muted-foreground text-xs">{form.createdAt}</span>
                       </div>
