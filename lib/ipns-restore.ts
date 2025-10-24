@@ -20,8 +20,8 @@ interface RestoreResult {
 }
 
 /**
- * Fetch all forms created by a specific wallet address from the blockchain
- * Uses FormCreated events to find user's forms
+ * Fetch all forms created by a wallet address from blockchain
+ * Uses direct contract call instead of events for better reliability
  */
 export async function getUserFormsFromBlockchain(
   walletAddress: string
@@ -34,62 +34,49 @@ export async function getUserFormsFromBlockchain(
       throw new Error('Contract address not configured');
     }
 
+    console.log(`📡 Connecting to blockchain at ${rpcUrl}`);
+    console.log(`📝 Contract address: ${contractAddress}`);
+    console.log(`👤 Querying forms for: ${walletAddress}`);
+
     // Connect to blockchain (read-only)
     const provider = new ethers.JsonRpcProvider(rpcUrl);
     const contract = new ethers.Contract(contractAddress, FormRegistryABI, provider);
 
-    // Query FormCreated events for this creator
-    // Use deployment block from env or default to contract deployment
-    const deploymentBlock = process.env.NEXT_PUBLIC_CONTRACT_DEPLOYMENT_BLOCK 
-      ? parseInt(process.env.NEXT_PUBLIC_CONTRACT_DEPLOYMENT_BLOCK)
-      : 11681317; // Default: Status Network Testnet deployment
-    
-    const filter = contract.filters.FormCreated(walletAddress);
-    
-    console.log(`🔍 Querying FormCreated events for ${walletAddress} from block ${deploymentBlock}...`);
-    const events = await contract.queryFilter(filter, deploymentBlock, 'latest');
-    console.log(`Found ${events.length} FormCreated events`);
+    // Call getCreatorForms directly - much simpler than parsing events!
+    const formIds = await contract.getCreatorForms(walletAddress);
+    console.log(`✅ Found ${formIds.length} form IDs from contract:`, formIds);
 
-    // Extract form details from events and check if still active
-    const allForms = await Promise.all(events.map(async (event: any) => {
-      const args = event.args;
-      // Use toArray() or direct indexing to get actual values from ethers.js Result
-      const formId = args[1] || args.formId; // Index 1 is formId in event
-      const ipnsName = args[2] || args.ipnsName; // Index 2 is ipnsName
-      const encryptedKeyCID = args[3] || args.encryptedKeyCID; // Index 3 is encryptedKeyCID
-      
-      console.log('🔍 Raw event args:', { formId, ipnsName, encryptedKeyCID });
-      
-      // Check if form is still active on blockchain
+    // For each form ID, get the full form data
+    const allForms = await Promise.all(formIds.map(async (formId: string) => {
       try {
-        const formData = await contract.forms(String(formId));
-        const isActive = formData.active;
+        const formData = await contract.forms(formId);
         
-        return {
-          formId: formId ? String(formId) : '',
-          ipnsName: ipnsName ? String(ipnsName) : '',
-          encryptedKeyCID: encryptedKeyCID ? String(encryptedKeyCID) : '',
-          active: isActive,
+        const form = {
+          formId: String(formId),
+          ipnsName: String(formData.ipnsName),
+          encryptedKeyCID: String(formData.encryptedKeyCID),
+          active: Boolean(formData.active),
         };
+        
+        console.log(`📋 Form ${formId}:`, form);
+        
+        return form;
       } catch (error) {
-        console.error(`Failed to check status for form ${formId}:`, error);
-        return {
-          formId: formId ? String(formId) : '',
-          ipnsName: ipnsName ? String(ipnsName) : '',
-          encryptedKeyCID: encryptedKeyCID ? String(encryptedKeyCID) : '',
-          active: true, // Assume active if can't check
-        };
+        console.error(`❌ Failed to load form ${formId}:`, error);
+        return null;
       }
     }));
 
-    // Filter: only active forms with encrypted keys
-    const activeForms = allForms.filter(f => f.active && f.encryptedKeyCID);
+    // Filter out nulls and only keep active forms with encrypted keys
+    const activeForms = allForms
+      .filter((f): f is NonNullable<typeof f> => f !== null)
+      .filter(f => f.active && f.encryptedKeyCID);
     
-    console.log(`✅ Found ${allForms.length} total forms, ${activeForms.length} active with encrypted keys`);
-    console.log('✅ Active form objects:', activeForms);
+    console.log(`✅ Total: ${formIds.length} forms, ${activeForms.length} active with encrypted keys`);
+    console.log('✅ Active forms:', activeForms);
     return activeForms;
   } catch (error) {
-    console.error('Failed to fetch user forms from blockchain:', error);
+    console.error('❌ Failed to fetch user forms from blockchain:', error);
     return [];
   }
 }

@@ -25,7 +25,7 @@ import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { getUserFormsFromBlockchain, checkRestoreStatus } from "@/lib/ipns-restore";
 
 export default function Home() {
-  const { authenticated, login, user } = usePrivy();
+  const { ready, authenticated, login, user } = usePrivy();
   const { wallets } = useWallets();
   const [isLoading, setIsLoading] = useState(true);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -47,6 +47,12 @@ export default function Home() {
 
   useEffect(() => {
     const loadForms = async () => {
+      // Wait for Privy to be ready before proceeding
+      if (!ready) {
+        console.log('⏳ Waiting for Privy to initialize...');
+        return;
+      }
+
       try {
         let loadedForms: FormMetadata[] = [];
 
@@ -54,45 +60,61 @@ export default function Home() {
         if (authenticated && user?.wallet?.address) {
           console.log('📡 Fetching forms from blockchain for:', user.wallet.address);
           
-          const blockchainForms = await getUserFormsFromBlockchain(user.wallet.address);
-          console.log(`Found ${blockchainForms.length} forms on blockchain`);
+          try {
+            const blockchainForms = await getUserFormsFromBlockchain(user.wallet.address);
+            console.log(`✅ Found ${blockchainForms.length} forms on blockchain:`, blockchainForms);
 
-          // For each blockchain form, try to fetch metadata from IPFS via IPNS
-          const { getFormFromIPFS } = await import('@/lib/storacha');
-          const { saveFormMetadata } = await import('@/lib/form-storage');
-          
-          for (const bcForm of blockchainForms) {
-            try {
-              // Skip if form is marked as deleted
-              if (isFormDeleted(bcForm.formId)) {
-                console.log(`⏭️ Skipping deleted form: ${bcForm.formId}`);
-                continue;
-              }
-
-              // Resolve IPNS to get the form content
-              const formMetadata = await getFormFromIPFS(bcForm.ipnsName);
-              if (formMetadata) {
-                loadedForms.push(formMetadata);
-                
-                // Save to localStorage for offline access and faster loading
-                saveFormMetadata(formMetadata);
-                
-                // Save IPNS mapping to localStorage for quick access
-                saveIPNSMapping(formMetadata.id, bcForm.ipnsName);
-                
-                // Save CID mapping (get current CID from IPNS)
-                const { resolveIPNS } = await import('@/lib/ipns');
-                const currentCID = await resolveIPNS(bcForm.ipnsName);
-                if (currentCID) {
-                  saveCIDMapping(formMetadata.id, currentCID);
-                }
-                
-                console.log(`✅ Cached form: ${formMetadata.title}`);
-              }
-            } catch (error) {
-              console.error(`Failed to load form ${bcForm.formId}:`, error);
+            if (blockchainForms.length === 0) {
+              console.warn('⚠️ No forms found on blockchain for this address');
             }
+
+            // For each blockchain form, try to fetch metadata from IPFS via IPNS
+            const { getFormFromIPFS } = await import('@/lib/storacha');
+            const { saveFormMetadata } = await import('@/lib/form-storage');
+            
+            for (const bcForm of blockchainForms) {
+              try {
+                console.log(`📥 Loading form ${bcForm.formId} from IPNS: ${bcForm.ipnsName}`);
+                
+                // Skip if form is marked as deleted
+                if (isFormDeleted(bcForm.formId)) {
+                  console.log(`⏭️ Skipping deleted form: ${bcForm.formId}`);
+                  continue;
+                }
+
+                // Resolve IPNS to get the form content
+                const formMetadata = await getFormFromIPFS(bcForm.ipnsName);
+                if (formMetadata) {
+                  loadedForms.push(formMetadata);
+                  
+                  // Save to localStorage for offline access and faster loading
+                  saveFormMetadata(formMetadata);
+                  
+                  // Save IPNS mapping to localStorage for quick access
+                  saveIPNSMapping(formMetadata.id, bcForm.ipnsName);
+                  
+                  // Save CID mapping (get current CID from IPNS)
+                  const { resolveIPNS } = await import('@/lib/ipns');
+                  const currentCID = await resolveIPNS(bcForm.ipnsName);
+                  if (currentCID) {
+                    saveCIDMapping(formMetadata.id, currentCID);
+                  }
+                  
+                  console.log(`✅ Cached form: ${formMetadata.title}`);
+                } else {
+                  console.warn(`⚠️ Could not load form metadata from IPNS: ${bcForm.ipnsName}`);
+                }
+              } catch (error) {
+                console.error(`❌ Failed to load form ${bcForm.formId}:`, error);
+              }
+            }
+            
+            console.log(`📊 Total forms loaded from blockchain: ${loadedForms.length}`);
+          } catch (blockchainError) {
+            console.error('❌ Error fetching from blockchain:', blockchainError);
           }
+        } else {
+          console.log('ℹ️ Not authenticated or no wallet address');
         }
 
         // Fallback: Try IPFS CID mappings from localStorage
@@ -123,12 +145,7 @@ export default function Home() {
           const restoreStatus = await checkRestoreStatus(user.wallet.address);
           setNeedsRestore(restoreStatus.needsRestore);
           
-          if (restoreStatus.needsRestore > 0) {
-            toast.info(`${restoreStatus.needsRestore} form(s) need key restoration`, {
-              description: 'Click "Enable Editing" button on forms to edit them',
-              duration: 6000,
-            });
-          }
+          // Removed annoying toast - keys will be restored automatically when editing
         }
 
       } catch (error) {
@@ -151,7 +168,7 @@ export default function Home() {
       setIsLoading(false);
     };
     loadForms();
-  }, [authenticated, user?.wallet?.address]);
+  }, [ready, authenticated, user?.wallet?.address]);
 
   const handleDuplicateForm = async (formId: string, formTitle: string) => {
     setDuplicatingFormId(formId);
@@ -606,20 +623,6 @@ export default function Home() {
                         <span className="text-muted-foreground text-xs">{form.createdAt}</span>
                       </div>
                       <div className="flex flex-col gap-2">
-                        {ipnsStatuses[form.id] === 'partial' && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="w-full border-orange-500/50 hover:bg-orange-500/10 hover:border-orange-500"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              handleRestoreSingleKey(form.id, form.title);
-                            }}
-                          >
-                            <Shield className="h-3.5 w-3.5 mr-2" />
-                            Enable Editing on This Device
-                          </Button>
-                        )}
                         <div className="flex gap-2">
                           <Link href={`/forms/${form.id}/edit`} className="flex-1">
                             <Button variant="outline" className="w-full group/btn" size="sm">

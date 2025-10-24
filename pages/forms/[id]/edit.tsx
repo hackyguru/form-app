@@ -43,15 +43,18 @@ import { loadFormMetadata, saveFormMetadata } from "@/lib/form-storage";
 import { FormMetadata, FormField } from "@/types/form";
 import { uploadFormToIPFS, saveCIDMapping } from "@/lib/storacha";
 import { getIPNSNameObject, getIPNSName, updateIPNS, createIPNSName, publishToIPNS, saveIPNSKey, saveIPNSMapping } from "@/lib/ipns";
-import { usePrivy } from "@privy-io/react-auth";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { restoreSingleIPNSKey } from "@/lib/ipns-restore";
 
 export default function EditForm() {
   const router = useRouter();
   const { id } = router.query;
-  const { ready, authenticated, login } = usePrivy();
+  const { ready, authenticated, login, user } = usePrivy();
+  const { wallets } = useWallets();
 
   // State for loading
   const [loading, setLoading] = useState(true);
+  const [restoringKey, setRestoringKey] = useState(false);
   const [formMetadata, setFormMetadata] = useState<FormMetadata | null>(null);
 
   // Form data
@@ -64,27 +67,86 @@ export default function EditForm() {
   const [isSaving, setIsSaving] = useState(false);
   const [formFields, setFormFields] = useState<FormField[]>([]);
 
-  // Load form data on mount
+  // Load form data on mount and auto-restore IPNS key if needed
   useEffect(() => {
-    if (id && typeof id === 'string') {
+    const loadFormAndRestoreKey = async () => {
+      if (!id || typeof id !== 'string') return;
+      
       const metadata = loadFormMetadata(id);
-      if (metadata) {
-        setFormMetadata(metadata);
-        setFormData({
-          title: metadata.title,
-          description: metadata.description,
-          status: metadata.status,
-        });
-        setFormFields(metadata.fields);
-      } else {
+      if (!metadata) {
         toast.error("Form not found", {
           description: "The form you're trying to edit doesn't exist.",
         });
         router.push('/');
+        setLoading(false);
+        return;
       }
+
+      setFormMetadata(metadata);
+      setFormData({
+        title: metadata.title,
+        description: metadata.description,
+        status: metadata.status,
+      });
+      setFormFields(metadata.fields);
+
+      // Check if IPNS key needs to be restored
+      const ipnsName = getIPNSName(id);
+      if (ipnsName) {
+        const nameObj = await getIPNSNameObject(id);
+        
+        if (!nameObj && authenticated && user?.wallet?.address && wallets.length > 0) {
+          // Key not available locally - auto-restore it!
+          console.log('🔐 IPNS key not found locally - auto-restoring...');
+          setRestoringKey(true);
+          
+          toast.info("Restoring editing keys...", {
+            description: "Please sign the message to decrypt your keys",
+          });
+          
+          try {
+            const wallet = wallets[0];
+            const provider = await wallet.getEthereumProvider();
+            
+            const signMessageFn = async (message: string) => {
+              const signature = await provider.request({
+                method: 'personal_sign',
+                params: [message, user.wallet!.address],
+              });
+              return signature as string;
+            };
+
+            const result = await restoreSingleIPNSKey(
+              id,
+              user.wallet.address,
+              signMessageFn
+            );
+
+            if (result.success) {
+              toast.success("Editing enabled!", {
+                description: `You can now edit "${metadata.title}"`,
+              });
+            } else {
+              toast.error("Failed to restore editing keys", {
+                description: result.error || "Unknown error",
+              });
+            }
+          } catch (error) {
+            console.error('Failed to restore key:', error);
+            toast.error("Failed to restore editing keys", {
+              description: "You may not be able to update the permanent link",
+            });
+          } finally {
+            setRestoringKey(false);
+          }
+        }
+      }
+      
       setLoading(false);
-    }
-  }, [id, router]);
+    };
+
+    loadFormAndRestoreKey();
+  }, [id, authenticated, user?.wallet?.address, wallets, router]);
 
   // Save form function with IPNS update
   const handleSaveForm = async () => {
@@ -419,15 +481,19 @@ export default function EditForm() {
     { icon: Calendar, label: "Date", value: "date" },
   ];
 
-  // Show loading state while auth is initializing
-  if (!ready || loading) {
+  // Show loading state while auth is initializing or restoring keys
+  if (!ready || loading || restoringKey) {
     return (
       <div className="min-h-screen bg-linear-to-br from-background via-background to-muted/20 flex items-center justify-center">
         <Card className="w-full max-w-md mx-4">
           <CardContent className="flex flex-col items-center justify-center py-16">
             <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
-            <p className="text-lg font-semibold">Loading...</p>
-            <p className="text-sm text-muted-foreground">Please wait</p>
+            <p className="text-lg font-semibold">
+              {restoringKey ? "Restoring editing keys..." : "Loading..."}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {restoringKey ? "Please sign the message in your wallet" : "Please wait"}
+            </p>
           </CardContent>
         </Card>
       </div>
